@@ -33,6 +33,7 @@ class Block:
     text: str
     effective: str = ""  # ISO date printed next to a rate table, "" when none
     links: tuple[str, ...] = field(default_factory=tuple)
+    is_row: bool = False  # a table row (carries a value in its tier/column) rather than prose
 
 
 def _iso(match: re.Match) -> str:
@@ -145,7 +146,7 @@ class _PageParser:
 
     def add_table(self, rows: list[str], effective: str) -> None:
         for text, links in _table_rows(self.caption, rows):
-            self.blocks.append(Block(self.url, text, effective, links))
+            self.blocks.append(Block(self.url, text, effective, links, is_row=True))
 
 
 def parse_page(url: str, markdown: str) -> list[Block]:
