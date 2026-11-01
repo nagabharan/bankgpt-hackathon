@@ -36,6 +36,35 @@ def dateline(text: str) -> str:
     return date(int(year), _MONTHS.index(month) + 1, int(day)).isoformat()
 
 
+_HOW_MANY_BRANCHES = re.compile(r"\b(?:how many|number of|count of)\b[^?]*\bbranch", re.I)
+_RECOGNITION_WORDS = re.compile(r"recogni|award|honou?r|named|ranked|ranking", re.I)
+
+
+def answer_from_facts(question: str, facts: list[DatedFact]) -> DatedFact | None:
+    """The latest-dated fact that the question asks about, or None.
+
+    "How many branches...?" asks for the branch count; "what recognition ... from Forbes?"
+    asks for the ordinal for that organisation. Old pages keep repeating superseded values,
+    so the value on the newest page wins."""
+    wanted = None
+    if _HOW_MANY_BRANCHES.search(question):
+        wanted = "branch count"
+    elif _RECOGNITION_WORDS.search(question):
+        orgs = {f.label.removesuffix(" recognition") for f in facts if f.label.endswith(" recognition")}
+        asked = [org for org in sorted(orgs) if re.search(rf"\b{re.escape(org)}\b", question, re.I)]
+        wanted = f"{asked[0]} recognition" if asked else None
+    candidates = [f for f in facts if f.label == wanted]
+    return max(candidates, key=lambda f: (f.date, f.value)) if candidates else None
+
+
+def sentence_for(fact: DatedFact) -> str:
+    """One plain sentence stating only the winning value."""
+    if fact.label == "branch count":
+        return f"Dupaco has {fact.value}."
+    org = fact.label.removesuffix(" recognition").title()
+    return f"{org} has recognized Dupaco for the {fact.value} time."
+
+
 def dated_facts(url: str, markdown: str) -> list[DatedFact]:
     published = dateline(markdown)
     if not published:

@@ -16,8 +16,13 @@
   time for hours). Qualifiers then decide between look-alike facts: a term in the question
   ("60-month", "30-year") must match the block, a model year must fall inside the block's
   range ("2025" is inside "2024-27"), and a tier the question does not name (jumbo, business,
-  Roth, Traditional) is down-weighted so the plain tier is the default. Table rows are
-  preferred for rate and fee questions.
+  Roth, Traditional) is down-weighted so the plain tier is the default; an amount ("balance
+  between $10,000 and $24,999") must fall inside the row's amount tier. Rate and fee
+  questions search the table rows first, and only fall back to all blocks when no row
+  qualifies. A plural topic noun ("cards", "rates") or a word like "all"/"offer" asks for
+  several rows.
+- **Press-release facts:** "how many branches" and "what recognition from <org>" are answered
+  from the value on the latest-dated release, as one short sentence.
 - **Multi-fact answers:** the answer is the best block plus sibling blocks from the same page,
   date and kind that score nearly as well (all the matching 30-year mortgage rows, every
   line of a lobby-hours schedule, every card for "what cards do you offer"), at most six, in
@@ -45,6 +50,7 @@ Dupaco" differ between old and new releases, and the value on the latest-dated r
 ## Known gaps
 - Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
   counts, fees and award facts that differ between pages are not detected.
-- Answers are verbatim rows or passages, not composed sentences; the "highest/lowest" pick is
-  not applied, and general rate questions can still land on a prose passage instead of the
-  rate table.
+- Answers are verbatim rows or passages (except the press-release sentences); the
+  "highest/lowest" pick is not applied.
+- One-off facts that sit in prose (eligible states, a program's amount, a wallet list, a
+  contact phone number) are only found when ordinary search ranks the right passage first.

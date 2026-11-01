@@ -29,8 +29,8 @@ STOPWORDS = frozenset(
     "a an and are as at be by can do does for how i in is it me my of on or s tell "
     "that the there this to what when where which who with you your "
     # question filler that carries no topic
-    "about currently could did from general get give have has know like many much need now "
-    "please provide right today want was were would".split()
+    "about between currently could did from general get give have has keep know like many much "
+    "need now please provide right same their them they today want was were would".split()
 )
 
 # "six month", "sixty-month", "twenty four months" -> "6 month", "60 month", "24 months".
@@ -84,6 +84,11 @@ def stem(token: str) -> str:
 def tokens(text: str) -> list[str]:
     """Lower-cased, plural-folded search tokens (keeps decimals like '5.39')."""
     return [stem(t) for t in _TOKEN.findall(text.lower())]
+
+
+def plural_nouns(text: str) -> set[str]:
+    """Folded forms of the plural content words in `text` ("cards" -> "card", "rates" -> "rate")."""
+    return {stem(t) for t in _TOKEN.findall(text.lower()) if t not in STOPWORDS and stem(t) != t}
 
 
 def content_tokens(text: str) -> list[str]:

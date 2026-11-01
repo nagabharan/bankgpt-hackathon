@@ -14,6 +14,7 @@ from typing import Optional
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
 from matching import asks_for_link, links_of, select_blocks
+from pressfacts import answer_from_facts, sentence_for
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
@@ -35,6 +36,9 @@ class KnowledgeBase:
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
         view = self._view_for(as_of)
+        fact = answer_from_facts(question, view.dated_facts) if view else None
+        if fact is not None:
+            return Answer(text=sentence_for(fact), sources=[Source(fact.url, view.snapshot_id, fact.value)])
         blocks = select_blocks(view.index, question) if view else []
         if not blocks:
             return Answer(text=NOT_LISTED, confident=False)

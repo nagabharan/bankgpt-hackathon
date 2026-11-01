@@ -7,12 +7,11 @@ import re
 from bm25 import Index
 from blocks import Block
 from qualifiers import QuestionInfo, parse_question
-from textnorm import MONEY_MARK, clean, content_tokens
+from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
-CANDIDATES = 30
+CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
 # Share of the question's idf mass the block must cover, else it does not answer the question.
 MIN_COVERAGE = 0.6
-ROW_BOOST = 1.5  # a table row beats prose when the question asks for a rate or fee
 NEAR_TIE = 0.9  # candidates within this share of the best score compete on freshness
 # Share of the best score a sibling block needs to join the answer, by question kind.
 HOURS_TIE = 0.6
@@ -27,6 +26,7 @@ SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minim
 # Words that ask for a link or for every item, not topics.
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
+PLURAL_EXEMPT = frozenset({"hour"})  # plural nouns that do not mean "several items"
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
@@ -80,32 +80,47 @@ def asks_for_link(question: str) -> bool:
     return bool(LINK_WORDS.intersection(content_tokens(clean(question))))
 
 
-def _score_candidates(index: Index, info: QuestionInfo, query: list[str]) -> list[tuple[float, int]]:
-    """(score, doc_id) for every candidate that answers the question, best first."""
+def wants_list(text: str, query: list[str]) -> bool:
+    """A list word (all, each, offer...) or a plural topic noun (cards, rates): several rows are wanted.
+    "Hours" is plural by nature and has its own band."""
+    return bool(LIST_WORDS.intersection(query)) or bool(plural_nouns(text) - PLURAL_EXEMPT)
+
+
+def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: bool,
+                rows_only: bool) -> list[tuple[float, int]]:
+    """(score, doc_id) for the searched blocks that answer the question, best first."""
     wants_link = bool(LINK_WORDS.intersection(query))
     skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
     required = [t for t in query if t not in skipped]
-    asks_value = any(t in VALUE_SHAPES for t in query)
-    wants_list = bool(LIST_WORDS.intersection(query))
 
     scored = []
-    for score, doc_id in index.search(with_aliases(query), CANDIDATES):
+    for score, doc_id in index.search(with_aliases(query), CANDIDATES, rows_only):
         block = index.blocks[doc_id]
-        factor = info.fit(block, ignore_tiers=wants_list)
+        factor = info.fit(block, ignore_tiers=several)
         if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
-        scored.append((score * factor * (ROW_BOOST if asks_value and block.is_row else 1.0), doc_id))
+        scored.append((score * factor, doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
+
+
+def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool) -> list[tuple[float, int]]:
+    """A rate or fee question is answered by a table row when one qualifies; otherwise by any block."""
+    if any(t in VALUE_SHAPES for t in query):
+        rows = _qualifying(index, info, query, several, rows_only=True)
+        if rows:
+            return rows
+    return _qualifying(index, info, query, several, rows_only=False)
 
 
 def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
     text = clean(question)
     query = content_tokens(text)
-    scored = _score_candidates(index, parse_question(text), query)
+    several = wants_list(text, query)
+    scored = _score_candidates(index, parse_question(text), query, several)
     if not scored:
         return []
     top = scored[0][0]
@@ -113,7 +128,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
     best = blocks[max(contenders, key=lambda d: blocks[d].effective)]  # first of equals = best scored
 
-    tie = LIST_TIE if LIST_WORDS.intersection(query) else HOURS_TIE if "hour" in query else NEAR_TIE
+    tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
     group = [doc_id for score, doc_id in scored
              if score >= top * tie and blocks[doc_id].url == best.url
              and blocks[doc_id].effective == best.effective and blocks[doc_id].is_row == best.is_row]

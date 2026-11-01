@@ -18,6 +18,8 @@ YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b(?!-\d)")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 # Words that name a different tier of the same product; the plain tier is the default.
 TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief"})
+EXCEPTIONAL_TIERS = frozenset({"relief"})  # one-off programs: never part of "the rates"
+EXCEPTIONAL_TIER_FACTOR = 0.2
 
 WRONG_TIER_FACTOR = 0.5  # block names a tier the question did not ask for
 MISSING_TIER_FACTOR = 0.3  # question names a tier the block lacks
@@ -41,6 +43,22 @@ def year_spans_in(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+_MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
+# Amount tiers: "$10000 - $24999.99", "$25000+", "$300000 or less".
+_AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")
+NO_AMOUNT_BAND_FACTOR = 0.2  # every amount in the question lies outside the block's amount tiers
+
+
+def amount_bands_in(text: str) -> list[tuple[float, float]]:
+    bands = []
+    for lo, hi, single, kind in _AMOUNT_BAND.findall(text):
+        if single:
+            bands.append((float(single), float("inf")) if kind == "+" else (0.0, float(single)))
+        else:
+            bands.append((float(lo), float(hi)))
+    return bands
+
+
 def tier_words_in(text: str) -> frozenset[str]:
     return frozenset(w for w in re.findall(r"[a-z]+", text.lower()) if w in TIER_WORDS)
 
@@ -51,6 +69,7 @@ class QuestionInfo:
     years: tuple[int, ...]
     tiers: frozenset[str]
     consumed: frozenset[str]  # tokens the qualifiers already account for (digits, units)
+    amounts: tuple[float, ...] = ()  # dollar amounts the question names (a balance, a loan size)
 
     def fit(self, block: Block, ignore_tiers: bool = False) -> float:
         """0 rules the block out; otherwise a factor to scale its score by.
@@ -65,9 +84,13 @@ class QuestionInfo:
                 factor *= NO_YEAR_RANGE_FACTOR
             elif not any(lo <= y <= hi for y in self.years for lo, hi in spans):
                 return 0.0
-        if ignore_tiers:
-            return factor
+        if self.amounts:
+            bands = amount_bands_in(block.text)
+            if bands and not all(any(lo <= a <= hi for lo, hi in bands) for a in self.amounts):
+                factor *= NO_AMOUNT_BAND_FACTOR
         block_tiers = tier_words_in(block.text)
+        if ignore_tiers:  # a list wants every ordinary tier, but not a one-off program's rate
+            return factor * EXCEPTIONAL_TIER_FACTOR ** len((block_tiers & EXCEPTIONAL_TIERS) - self.tiers)
         factor *= WRONG_TIER_FACTOR ** len(block_tiers - self.tiers)
         factor *= MISSING_TIER_FACTOR ** len(self.tiers - block_tiers)
         return factor
@@ -81,4 +104,7 @@ def parse_question(text: str) -> QuestionInfo:
     spans = {m.group(0) for m in YEAR_SPAN.finditer(text)}
     years = tuple(sorted({int(y) for y in _YEAR.findall(text) if not any(y in s for s in spans)}))
     consumed.update(str(y) for y in years)
-    return QuestionInfo(terms_in(text), years, tier_words_in(text), frozenset(consumed))
+    raw_amounts = _MONEY_AMOUNT.findall(text)
+    consumed.update(raw_amounts)
+    amounts = tuple(float(a) for a in raw_amounts)
+    return QuestionInfo(terms_in(text), years, tier_words_in(text), frozenset(consumed), amounts)

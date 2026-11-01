@@ -28,12 +28,17 @@ class Index:
         df = len(self._postings.get(token, ()))
         return math.log(1 + (len(self.blocks) - df + 0.5) / (df + 0.5))
 
-    def search(self, query_tokens: list[str], limit: int = 10) -> list[tuple[float, int]]:
-        """Top (score, doc_id) pairs; ties broken by doc id so results are deterministic."""
+    def search(self, query_tokens: list[str], limit: int = 10, rows_only: bool = False) -> list[tuple[float, int]]:
+        """Top (score, doc_id) pairs; ties broken by doc id so results are deterministic.
+
+        `rows_only` ranks table rows against each other: long rows would otherwise lose to the
+        short passages that mention the same words."""
         scores: dict[int, float] = defaultdict(float)
         for token in sorted(set(query_tokens)):
             weight = self.idf(token)
             for doc_id, tf in self._postings.get(token, ()):
+                if rows_only and not self.blocks[doc_id].is_row:
+                    continue
                 norm = K1 * (1 - B + B * self._lengths[doc_id] / self._avg_length)
                 scores[doc_id] += weight * tf * (K1 + 1) / (tf + norm)
         top = heapq.nlargest(limit, ((score, -doc_id) for doc_id, score in scores.items()))

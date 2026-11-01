@@ -237,6 +237,58 @@ STAGES = [
              ("What did the review find that tests missed?",
               "Everything here: the public set has no paraphrases, so the problems only showed when probing variants.")],
     ),
+    dict(
+        slug="07-row-first-and-facts",
+        title="Row-first search, press-release answers, list mode",
+        labels=["answers"],
+        summary="Rate questions search table rows directly, plural nouns ask for several rows, amounts match tiers, and "
+                "branch-count and ordinal questions are answered from the latest dated release.",
+        files=["matching.py", "bm25.py", "qualifiers.py", "pressfacts.py", "solution.py", "textnorm.py"],
+        idea="For a question that asks for a rate, fee or price, table rows are ranked against each other first, so they "
+             "no longer lose to short passages. \"Cards\" or \"rates\" (plural) and words like \"all\" or \"offer\" ask for "
+             "several rows. A dollar amount in the question must fall inside the row's amount tier. \"How many branches\" and "
+             "\"what recognition from Forbes\" use the value on the newest-dated press release.",
+        changed={"facts", "search", "qualifiers", "group", "checks"},
+        decisions=["Answer count and ordinal questions from dated press-release facts",
+                   "Plural nouns turn on list mode",
+                   "Amount tiers work like model-year ranges",
+                   "Rate and fee questions search table rows first"],
+        whys=[
+            ("Why did \"What are the mortgage rates?\" return a down-payment sentence?",
+             "A passage mentioning mortgage and rates outscored every table row."),
+            ("Why did table rows score lower?",
+             "BM25 normalises by length, and a row with a caption, headers and several figures is long."),
+            ("Why didn't a bigger candidate pool fix it?",
+             "Even 100 candidates held one mortgage row, and that was the one-off Relief program."),
+            ("Why didn't a row boost fix it?",
+             "A boost multiplies a score; it cannot bring back a row that was never retrieved."),
+            ("Why does searching rows separately work?",
+             "Rows compete only with other rows, and rate questions are answered by rate tables."),
+        ],
+        examples=[("What are the mortgage rates right now?", None,
+                   "Your First Home Starts Here: - Down payments usually range from 3% to 20%, but eligible buyers can explore 100% on adjustable-rate mortgages."),
+                  ("What credit cards do you offer and what are their APRs?", None,
+                   "Escape high interest credit card debt: Even better, you’ll get an introductory 2.90% APR on all balances transferred ..."),
+                  ("How many branches does Dupaco have?", None,
+                   "Surcharge-Free ATM:  Dupaco Branches  Shared Branches  Surcharge-Free ATMs"),
+                  ("What recognition has Dupaco received from Forbes?", None,
+                   "That isn't listed on our website; please contact us."),
+                  ("Provide current checking account interest rates", None,
+                   "1st Rate Checking | Account Type 1st Rate Checking | Balance Tier $100000+ | Dividend Rate 0.10% | ...")],
+        gaps=["Eligibility states, a contact phone number, the Home$tart amount, wallet names and a \"join online\" link are "
+              "found only when ordinary search ranks the right passage first.",
+              "The credit-card list still misses the business cards' names.",
+              "\"Highest\" and \"lowest\" are ignored.",
+              "Two refusal-or-answer calls remain wrong: lobby hours \"same\" and the student-loan question."],
+        faq=[("Is the branch-count rule hard-coded?",
+              "The patterns are generic (N branch office locations, Nth time X recognized), the values come from the pages."),
+             ("Why does the newest release win rather than the most common count?",
+              "The count changed over time and old releases repeat the old number; 23 is the most frequent, 22 the latest."),
+             ("Could list mode add a forbidden number?",
+              "Yes, any extra row can; the gate shows no trap hits on the practice set, and rows come from one page and date."),
+             ("What happens when no table row qualifies?",
+              "The search falls back to every block, as before.")],
+    ),
 ]
 
 # Flow nodes: id, label, row (ingest / answer), column.
@@ -245,6 +297,7 @@ NODES = [
     ("blocks", "Blocks (rows, passages)", "ingest", 1),
     ("index", "BM25 index per snapshot", "ingest", 2),
     ("conflicts", "conflicts()", "ingest", 3),
+    ("facts", "Dated press-release facts", "ingest", 4),
     ("question", "Question", "answer", 0),
     ("snapshot", "Pick snapshot (as_of)", "answer", 1),
     ("search", "BM25 search", "answer", 2),
@@ -258,5 +311,5 @@ EDGES = [("pages", "blocks"), ("blocks", "index"), ("blocks", "conflicts"),
          ("question", "snapshot"), ("snapshot", "search"), ("search", "checks"), ("checks", "qualifiers"),
          ("qualifiers", "rank"), ("rank", "group"), ("group", "answer")]
 # Nodes that exist from each stage on (a stage's report greys out nodes built later).
-BUILT_FROM = {"pages": 1, "blocks": 2, "index": 2, "conflicts": 5, "question": 1, "snapshot": 2, "search": 2,
+BUILT_FROM = {"pages": 1, "blocks": 2, "index": 2, "conflicts": 5, "facts": 5, "question": 1, "snapshot": 2, "search": 2,
               "checks": 2, "qualifiers": 3, "rank": 3, "group": 4, "answer": 1}
