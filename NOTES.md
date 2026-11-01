@@ -18,6 +18,10 @@
   range ("2025" is inside "2024-27"), and a tier the question does not name (jumbo, business,
   Roth, Traditional) is down-weighted so the plain tier is the default. Table rows are
   preferred for rate and fee questions.
+- **Multi-fact answers:** the answer is the best block plus sibling blocks from the same page,
+  date and kind that score nearly as well (all the matching 30-year mortgage rows, every
+  line of a lobby-hours schedule, every card for "what cards do you offer"), at most six, in
+  page order. For "link/URL" questions the page's own links are appended.
 - **Not on the site:** if no block qualifies, the answer is a short "isn't listed, please
   contact us" with no numbers, and `confident` is false.
 
@@ -29,5 +33,6 @@ are not handled yet; this file will be updated as they land.
 
 ## Known gaps
 - `conflicts()` returns an empty list for now.
-- Answers return a whole matching row or passage; picking the exact tier and combining several
-  rows for list questions are still to do.
+- Answers are verbatim rows or passages, not composed sentences; the "highest/lowest" pick is
+  not applied, and general rate questions can still land on a prose passage instead of the
+  rate table.

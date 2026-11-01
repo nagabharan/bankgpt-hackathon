@@ -1,8 +1,8 @@
-"""Pick the block that answers a question: retrieve, check, apply qualifiers, prefer fresh."""
+"""Pick the blocks that answer a question: retrieve, check, apply qualifiers, prefer fresh,
+then gather the sibling blocks that belong in the same answer."""
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from bm25 import Index
 from blocks import Block
@@ -14,11 +14,19 @@ CANDIDATES = 30
 MIN_COVERAGE = 0.6
 ROW_BOOST = 1.5  # a table row beats prose when the question asks for a rate or fee
 NEAR_TIE = 0.9  # candidates within this share of the best score compete on freshness
+# Share of the best score a sibling block needs to join the answer, by question kind.
+HOURS_TIE = 0.6
+LIST_TIE = 0.5
+MAX_BLOCKS = 6
+MAX_LINKS = 3
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
 ALIASES = {"mortgage": ("home",), "cd": ("certificate",)}
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
+# Words that ask for a link or for every item, not topics.
+LINK_WORDS = frozenset({"link", "url", "website", "site"})
+LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
@@ -46,23 +54,57 @@ def has_asked_value(query: list[str], block: Block) -> bool:
     return all(shape.search(block.text) for word, shape in VALUE_SHAPES.items() if word in query)
 
 
-def best_block(index: Index, question: str) -> Optional[Block]:
-    text = clean(question)
-    info: QuestionInfo = parse_question(text)
-    query = content_tokens(text)
-    required = [t for t in query if t not in info.consumed and t not in VALUE_SHAPES and t not in SUPERLATIVES]
+def _host(url: str) -> str:
+    return url.split("//", 1)[-1].split("/", 1)[0]
+
+
+def links_of(blocks: list[Block]) -> list[str]:
+    """The blocks' link targets, keeping only same-host ones when the page has any."""
+    found = list(dict.fromkeys(link for block in blocks for link in block.links))
+    own = [link for link in found if _host(link) == _host(blocks[0].url)]
+    return (own or found)[:MAX_LINKS]
+
+
+def asks_for_link(question: str) -> bool:
+    return bool(LINK_WORDS.intersection(content_tokens(clean(question))))
+
+
+def _score_candidates(index: Index, info: QuestionInfo, query: list[str]) -> list[tuple[float, int]]:
+    """(score, doc_id) for every candidate that answers the question, best first."""
+    wants_link = bool(LINK_WORDS.intersection(query))
+    skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = [t for t in query if t not in skipped]
     asks_value = any(t in VALUE_SHAPES for t in query)
+    wants_list = bool(LIST_WORDS.intersection(query))
 
     scored = []
     for score, doc_id in index.search(with_aliases(query), CANDIDATES):
         block = index.blocks[doc_id]
-        factor = info.fit(block)
-        if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_asked_value(query, block):
+        factor = info.fit(block, ignore_tiers=wants_list)
+        if not factor or coverage(index, required, block) < MIN_COVERAGE:
             continue
-        scored.append((score * factor * (ROW_BOOST if asks_value and block.is_row else 1.0), block))
+        if not (block.links if wants_link else has_asked_value(query, block)):
+            continue
+        scored.append((score * factor * (ROW_BOOST if asks_value and block.is_row else 1.0), doc_id))
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
+    return scored
+
+
+def select_blocks(index: Index, question: str) -> list[Block]:
+    """The best block plus its siblings (same page, date and kind) that belong in the answer."""
+    text = clean(question)
+    query = content_tokens(text)
+    scored = _score_candidates(index, parse_question(text), query)
     if not scored:
-        return None
-    scored.sort(key=lambda pair: -pair[0])  # stable: equal scores keep index order
+        return []
     top = scored[0][0]
-    contenders = [block for score, block in scored if score >= top * NEAR_TIE]
-    return max(contenders, key=lambda block: block.effective)  # first of equals = best scored
+    blocks = index.blocks
+    contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
+    best = blocks[max(contenders, key=lambda d: blocks[d].effective)]  # first of equals = best scored
+
+    tie = LIST_TIE if LIST_WORDS.intersection(query) else HOURS_TIE if "hour" in query else NEAR_TIE
+    group = [doc_id for score, doc_id in scored
+             if score >= top * tie and blocks[doc_id].url == best.url
+             and blocks[doc_id].effective == best.effective and blocks[doc_id].is_row == best.is_row]
+    kept = sorted(group[:MAX_BLOCKS])  # the highest scored, shown in page order
+    return list(dict.fromkeys(blocks[d] for d in kept))

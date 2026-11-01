@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from contract import Answer, Conflict, Snapshot, Source
-from matching import best_block
+from matching import asks_for_link, links_of, select_blocks
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
@@ -34,11 +34,14 @@ class KnowledgeBase:
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
         view = self._view_for(as_of)
-        block = best_block(view.index, question) if view else None
-        if block is None:
+        blocks = select_blocks(view.index, question) if view else []
+        if not blocks:
             return Answer(text=NOT_LISTED, confident=False)
-        source = Source(url=block.url, snapshot_id=view.snapshot_id, quote=block.text[:200])
-        return Answer(text=block.text, sources=[source])
+        lines = [block.text for block in blocks]
+        if asks_for_link(question):
+            lines += links_of(blocks)
+        source = Source(url=blocks[0].url, snapshot_id=view.snapshot_id, quote=blocks[0].text[:200])
+        return Answer(text="\n".join(lines), sources=[source])
 
     def conflicts(self) -> list[Conflict]:
         return []

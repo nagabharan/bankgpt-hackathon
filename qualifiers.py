@@ -17,7 +17,7 @@ _TERM = re.compile(r"\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b", re.I)
 _YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 # Words that name a different tier of the same product; the plain tier is the default.
-TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional"})
+TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief"})
 
 WRONG_TIER_FACTOR = 0.5  # block names a tier the question did not ask for
 MISSING_TIER_FACTOR = 0.3  # question names a tier the block lacks
@@ -52,8 +52,10 @@ class QuestionInfo:
     tiers: frozenset[str]
     consumed: frozenset[str]  # tokens the qualifiers already account for (digits, units)
 
-    def fit(self, block: Block) -> float:
-        """0 rules the block out; otherwise a factor to scale its score by."""
+    def fit(self, block: Block, ignore_tiers: bool = False) -> float:
+        """0 rules the block out; otherwise a factor to scale its score by.
+
+        `ignore_tiers` is for list questions, which want every tier of the product."""
         if self.terms and not self.terms & terms_in(block.text):
             return 0.0
         factor = 1.0
@@ -63,6 +65,8 @@ class QuestionInfo:
                 factor *= NO_YEAR_RANGE_FACTOR
             elif not any(lo <= y <= hi for y in self.years for lo, hi in spans):
                 return 0.0
+        if ignore_tiers:
+            return factor
         block_tiers = tier_words_in(block.text)
         factor *= WRONG_TIER_FACTOR ** len(block_tiers - self.tiers)
         factor *= MISSING_TIER_FACTOR ** len(self.tiers - block_tiers)
