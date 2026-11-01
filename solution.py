@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
 from matching import asks_for_link, links_of, select_blocks
 from views import SnapshotView, build_view
@@ -44,7 +45,7 @@ class KnowledgeBase:
         return Answer(text="\n".join(lines), sources=[source])
 
     def conflicts(self) -> list[Conflict]:
-        return []
+        return find_conflicts(self.views[-1]) if self.views else []
 
 
 def build() -> KnowledgeBase:

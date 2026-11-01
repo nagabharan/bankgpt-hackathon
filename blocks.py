@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import textwrap
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import Iterator, NamedTuple
 
 from textnorm import MONEY_MARK, clean, strip_links
 
@@ -23,6 +23,15 @@ EFFECTIVE_LOOKAHEAD_LINES = 4
 _EFFECTIVE = re.compile(r"effective\s+(?:as of\s+)?(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b", re.I)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _TABLE_SEPARATOR = re.compile(r"^\|?\s*:?-{3,}")
+# Column header words -> kind of figure, first match wins ("Annual Percentage Rate" is apr, not rate).
+COLUMN_KINDS = (
+    ("payment", ("payment",)),
+    ("points", ("point",)),
+    ("apy", ("yield", "apy")),
+    ("apr", ("percentage rate", "apr")),
+    ("rate", ("rate",)),
+)
+FIGURE_KINDS = frozenset({"apy", "apr", "rate"})  # the columns whose values can contradict each other
 _EMPHASIS = re.compile(r"\*\*|__")
 _HAS_DIGIT = re.compile(r"\d")
 
@@ -34,6 +43,9 @@ class Block:
     effective: str = ""  # ISO date printed next to a rate table, "" when none
     links: tuple[str, ...] = field(default_factory=tuple)
     is_row: bool = False  # a table row (carries a value in its tier/column) rather than prose
+    label: str = ""  # rows only: which row of its table (section, tier cells)
+    figures: tuple[tuple[str, str], ...] = ()  # rows only: (column kind, cell) per rate/APY/APR cell
+    caption: str = ""  # rows only: the table's title, which varies between pages
 
 
 def _iso(match: re.Match) -> str:
@@ -64,7 +76,23 @@ def _first_row_is_data(rows: list[str]) -> bool:
     return bool(kinds) and "" not in kinds and kinds == {_value_kind(c) for c in below if c}
 
 
-def _table_rows(caption: str, rows: list[str]) -> list[tuple[str, tuple[str, ...]]]:
+def column_kind(header: str) -> str:
+    """What a figure under this column header is: apy, apr, rate, points, payment or other."""
+    h = header.lower()
+    for kind, words in COLUMN_KINDS:
+        if any(word in h for word in words):
+            return kind
+    return "other"
+
+
+class _Row(NamedTuple):
+    text: str
+    links: tuple[str, ...]
+    label: str  # section and the tier cells (term, balance, model year): which row of the table
+    figures: tuple[tuple[str, str], ...]  # (column kind, cell) for each rate/money cell
+
+
+def _table_rows(caption: str, rows: list[str]) -> list[_Row]:
     """Render each data row as 'caption | section | header cell | header cell'.
 
     A row with a single filled cell (e.g. '|Deposit Services Business||||') names the
@@ -81,7 +109,10 @@ def _table_rows(caption: str, rows: list[str]) -> list[tuple[str, tuple[str, ...
             continue
         pairs = [f"{h} {c}".strip() for h, c in zip(header, cells) if c] if header else filled
         text, links = strip_links(" | ".join(p for p in (caption, section, *pairs) if p))
-        rendered.append((text, tuple(links)))
+        kinds = [column_kind(h) for h in header] if header else ["other"] * len(cells)
+        figures = tuple((k, strip_links(c)[0]) for k, c in zip(kinds, cells) if k in FIGURE_KINDS and _value_kind(c))
+        names = [strip_links(c)[0] for k, c in zip(kinds, cells) if c and k == "other"]
+        rendered.append(_Row(text, tuple(links), " | ".join(p for p in (section, *names) if p), figures))
     return rendered
 
 
@@ -145,8 +176,9 @@ class _PageParser:
                                      links=tuple(links)))
 
     def add_table(self, rows: list[str], effective: str) -> None:
-        for text, links in _table_rows(self.caption, rows):
-            self.blocks.append(Block(self.url, text, effective, links, is_row=True))
+        for row in _table_rows(self.caption, rows):
+            self.blocks.append(Block(self.url, row.text, effective, row.links, True, row.label, row.figures,
+                                     self.caption))
 
 
 def parse_page(url: str, markdown: str) -> list[Block]:

@@ -69,8 +69,11 @@ def import_violations() -> list[str]:
     return found
 
 
-def check(report: dict, baseline: dict, same_answers: bool) -> list[str]:
+def check(report: dict, selftest: dict, baseline: dict, same_answers: bool) -> list[str]:
     failures = []
+    conflicts_f1 = selftest["conflicts"]["f1"]
+    if conflicts_f1 < baseline.get("selftest_conflicts_f1", 0) - SCORE_TOLERANCE:
+        failures.append(f"selftest conflicts f1 {conflicts_f1} < baseline {baseline['selftest_conflicts_f1']}")
     if report["final_score"] < baseline.get("final_score", 0) - SCORE_TOLERANCE:
         failures.append(f"final_score {report['final_score']} < baseline {baseline['final_score']}")
     if report["stale_trap_hits"] > baseline.get("stale_trap_hits", report["stale_trap_hits"]):
@@ -114,17 +117,19 @@ def main() -> int:
     selftest = run_eval(OUT / "selftest", "0", selftest=True)
     baseline = json.loads(BASELINE.read_text()) if BASELINE.exists() and not args.rebaseline else {}
 
-    failures = check(report, baseline, answers(OUT / "seed0") == answers(OUT / "seed1"))
+    failures = check(report, selftest, baseline, answers(OUT / "seed0") == answers(OUT / "seed1"))
     log_row(args.label, args.note, report, selftest, failures)
 
     print(f"{args.label}: final={report['final_score']} (baseline {baseline.get('final_score', 'none')}) "
           f"stale_hits={report['stale_trap_hits']} p95={report['speed']['p95_s']}s selftest={selftest['final_score']}")
+    print(f"  selftest conflicts: {selftest['conflicts']}")
     for cat, v in report.get("by_category", {}).items():
         print(f"  {cat}: {v}")
     for f in failures:
         print("FAIL:", f)
     if not failures and args.accept:
-        BASELINE.write_text(json.dumps({k: report[k] for k in ("final_score", "stale_trap_hits")}))
+        BASELINE.write_text(json.dumps({**{k: report[k] for k in ("final_score", "stale_trap_hits")},
+                                        "selftest_conflicts_f1": selftest["conflicts"]["f1"]}))
         print("baseline updated")
     return 1 if failures else 0
 

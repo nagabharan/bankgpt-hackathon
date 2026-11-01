@@ -31,8 +31,17 @@ The newest snapshot wins. Within it, candidates that score about the same compet
 a promo page still showing last winter's rate. Expired promotions and press-release dates
 are not handled yet; this file will be updated as they land.
 
+## Conflicts
+`conflicts()` looks only at the latest snapshot. It compares table rows by their tier cells
+(term, balance band, model-year range ranked within its page, so "2023-26" lines up with
+"2024-27") and short prose statements like "6-month certificate APY: 3.50%". Two pages that
+share a product word but give different rate, APY or APR numbers are a conflict. Entries are
+merged per product and term. The winner is the page with the later "effective as of" date, or
+the one that is not an ended offer; with neither signal there is no resolution.
+
 ## Known gaps
-- `conflicts()` returns an empty list for now.
+- Conflicts are found only for rate-like numbers; counts, awards and fees that differ
+  between press releases and pages are not detected.
 - Answers are verbatim rows or passages, not composed sentences; the "highest/lowest" pick is
   not applied, and general rate questions can still land on a prose passage instead of the
   rate table.
