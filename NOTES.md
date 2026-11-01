@@ -36,12 +36,15 @@ are not handled yet; this file will be updated as they land.
 (term, balance band, model-year range ranked within its page, so "2023-26" lines up with
 "2024-27") and short prose statements like "6-month certificate APY: 3.50%". Two pages that
 share a product word but give different rate, APY or APR numbers are a conflict. Entries are
-merged per product and term. The winner is the page with the later "effective as of" date, or
-the one that is not an ended offer; with neither signal there is no resolution.
+merged per product (mortgage purchase and refinance stay separate). The winner is the page with
+the later "effective as of" date, or the one that is not an ended offer; with neither signal
+there is no resolution. Introductory-rate columns are ignored. Dated press-release facts are
+handled separately: branch counts ("22 branch office locations") and "Nth time X recognized
+Dupaco" differ between old and new releases, and the value on the latest-dated release wins.
 
 ## Known gaps
-- Conflicts are found only for rate-like numbers; counts, awards and fees that differ
-  between press releases and pages are not detected.
+- Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
+  counts, fees and award facts that differ between pages are not detected.
 - Answers are verbatim rows or passages, not composed sentences; the "highest/lowest" pick is
   not applied, and general rate questions can still land on a prose passage instead of the
   rate table.

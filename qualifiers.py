@@ -12,9 +12,9 @@ from blocks import Block
 from textnorm import stem
 
 # "60 Months", "30-Year", "17 Month": number then a unit; stored in months.
-_TERM = re.compile(r"\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b", re.I)
-# Model-year ranges "2024-27" / "2023-2026", and bare years in a question.
-YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b")
+_TERM = re.compile(r"(?<![\d.])\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b(?!\s*old)", re.I)
+# Model-year ranges "2024-27" / "2023-2026", and bare years in a question (not "2026-09-25").
+YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b(?!-\d)")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 # Words that name a different tier of the same product; the plain tier is the default.
 TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief"})

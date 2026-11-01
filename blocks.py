@@ -30,7 +30,11 @@ COLUMN_KINDS = (
     ("apy", ("yield", "apy")),
     ("apr", ("percentage rate", "apr")),
     ("rate", ("rate",)),
+    ("minimum", ("min.", "minimum")),  # "Min. to Open", "Min. to Earn": not part of a row's identity
+    ("fee", ("fee",)),
 )
+# "Dividend Rate for 1st 6 Months" is a teaser rate: it must not be compared with standard rates.
+_INTRO_COLUMN = re.compile(r"1st \d+ months?|introductory", re.I)
 FIGURE_KINDS = frozenset({"apy", "apr", "rate"})  # the columns whose values can contradict each other
 _EMPHASIS = re.compile(r"\*\*|__")
 _HAS_DIGIT = re.compile(r"\d")
@@ -77,8 +81,11 @@ def _first_row_is_data(rows: list[str]) -> bool:
 
 
 def column_kind(header: str) -> str:
-    """What a figure under this column header is: apy, apr, rate, points, payment or other."""
+    """What a figure under this column header is: apy, apr, rate, points, payment, minimum, fee,
+    promo (teaser rate) or other."""
     h = header.lower()
+    if _INTRO_COLUMN.search(h):
+        return "promo"
     for kind, words in COLUMN_KINDS:
         if any(word in h for word in words):
             return kind

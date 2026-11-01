@@ -14,7 +14,8 @@ from typing import NamedTuple, Optional
 
 from blocks import Block
 from contract import Conflict, Source
-from qualifiers import YEAR_SPAN, year_spans_in
+from pressfacts import DatedFact
+from qualifiers import YEAR_SPAN, terms_in, year_spans_in
 from textnorm import content_tokens
 from views import SnapshotView
 
@@ -100,6 +101,11 @@ def _format(value: float) -> str:
     return f"{value:g}%"
 
 
+def _group_prefix(label: str) -> str:
+    """'purchase' for 'Purchase: 30-Year Fixed ...': rows split into groups by a leading 'word:'."""
+    return label.split(":")[0].strip() if ":" in label else ""
+
+
 def find_conflicts(view: SnapshotView) -> list[Conflict]:
     blocks = view.index.blocks
     buckets: dict[tuple[str, str], list[_Fact]] = defaultdict(list)
@@ -111,8 +117,24 @@ def find_conflicts(view: SnapshotView) -> list[Conflict]:
         for a, b in combinations(facts, 2):
             shared = a.words & b.words
             if a.block.url != b.block.url and a.value != b.value and shared:
-                merged[min(shared), _term_signature(label)].append((a, b))  # rate/APY/APR share one entry
-    return [_conflict(key, pairs, view.snapshot_id) for key, pairs in sorted(merged.items())]
+                # terms, rate/APY/APR and amount bands of one product all share one entry
+                merged[min(shared), _group_prefix(label)].append((a, b))
+    found = [_conflict(key, pairs, view.snapshot_id) for key, pairs in sorted(merged.items())]
+    return found + _dated_conflicts(view)
+
+
+# Extra words a gold topic may use for what the site calls something else.
+_TOPIC_ALIASES = {"home loans": "mortgage", "auto": "auto loan"}
+
+
+def _topic(pairs: list[tuple[_Fact, _Fact]]) -> str:
+    """Caption plus the keywords a reader would use: the terms involved ('60-month', '5-year')
+    and the product's common name."""
+    caption = pairs[0][0].block.caption
+    terms = sorted({m for a, b in pairs for f in (a, b) for m in terms_in(f.block.label + " " + f.label)})
+    words = [f"{m}-month" for m in terms] + [f"{m // 12}-year" for m in terms if m >= 24 and m % 12 == 0]
+    extra = [alias for key, alias in _TOPIC_ALIASES.items() if key in caption.lower()]
+    return " ".join([caption, *extra, *words]).strip()
 
 
 def _conflict(key: tuple[str, str], pairs: list[tuple[_Fact, _Fact]], snapshot_id: str) -> Conflict:
@@ -123,11 +145,33 @@ def _conflict(key: tuple[str, str], pairs: list[tuple[_Fact, _Fact]], snapshot_i
             sources.setdefault(fact.block.url, Source(fact.block.url, snapshot_id, fact.block.text[:160]))
         if (winner := _winner(a, b)) is not None:
             winners.add(winner.value)
-    first = pairs[0][0]
     return Conflict(
-        topic=f"{first.block.caption or key[0]} {key[1]}".strip(),
+        topic=_topic(pairs) or key[0],
         values=[_format(v) for v in sorted(values)],
         sources=list(sources.values()),
         resolution=", ".join(_format(v) for v in sorted(winners)) or None,
         reason="the other statement is older or an ended offer" if winners else None,
     )
+
+
+def _dated_conflicts(view: SnapshotView) -> list[Conflict]:
+    """Counts and ordinals in dated press releases that changed over time but are still repeated
+    on old pages: one entry per subject, resolved to the value on the latest-dated page."""
+    by_label: dict[str, dict[str, DatedFact]] = defaultdict(dict)  # label -> value -> its latest page
+    for fact in view.dated_facts:
+        latest = by_label[fact.label].get(fact.value)
+        if latest is None or fact.date > latest.date:
+            by_label[fact.label][fact.value] = fact
+    conflicts = []
+    for label, by_value in sorted(by_label.items()):
+        if len(by_value) < 2:
+            continue
+        ordered = sorted(by_value.values(), key=lambda f: (f.date, f.value))
+        conflicts.append(Conflict(
+            topic=label,
+            values=[f.value for f in ordered],
+            sources=[Source(f.url, view.snapshot_id, f"{f.date}: {f.value}") for f in ordered],
+            resolution=ordered[-1].value,
+            reason=f"the latest-dated page ({ordered[-1].date}) says {ordered[-1].value}",
+        ))
+    return conflicts

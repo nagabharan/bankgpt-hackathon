@@ -29,15 +29,30 @@ STOPWORDS = frozenset(
     "a an and are as at be by can do does for how i in is it me my of on or s tell "
     "that the there this to what when where which who with you your "
     # question filler that carries no topic
-    "about currently general get give have has know many much need now please provide "
-    "right today want would".split()
+    "about currently could did from general get give have has know like many much need now "
+    "please provide right today want was were would".split()
 )
+
+# "six month", "sixty-month", "twenty four months" -> "6 month", "60 month", "24 months".
+_UNIT_WORDS = {w: i for i, w in enumerate(
+    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen".split(), start=1)}
+_TENS_WORDS = {w: 10 * i for i, w in enumerate(
+    "twenty thirty forty fifty sixty seventy eighty ninety".split(), start=2)}
+_NUMBER_WORD = (rf"(?:(?:{'|'.join(_TENS_WORDS)})(?:[\s-]+(?:{'|'.join(list(_UNIT_WORDS)[:9])}))?"
+                rf"|{'|'.join(_UNIT_WORDS)})")
+_WORD_TERM = re.compile(rf"\b({_NUMBER_WORD})[\s-]*(month|mo|year|yr)s?\b", re.I)
+
+
+def _word_value(words: str) -> int:
+    return sum(_TENS_WORDS.get(w) or _UNIT_WORDS[w] for w in re.split(r"[\s-]+", words.lower()))
 
 
 def clean(text: str) -> str:
     """Normalise a crawl fragment: drop footnote digits and literal newlines, unify dashes
     and number formats."""
     text = _LITERAL_NEWLINE.sub(" ", text)
+    text = _WORD_TERM.sub(lambda m: f"{_word_value(m.group(1))} {m.group(2)}", text)
     text = html.unescape(html.unescape(text))  # the crawl double-escapes: "&amp;#45;"
     text = _DASHES.sub("-", text)
     text = _AMOUNT_FOOTNOTE.sub(r"\1", text)
@@ -56,8 +71,14 @@ def strip_links(text: str) -> tuple[str, list[str]]:
 
 
 def stem(token: str) -> str:
-    """Crude plural folding so 'months' matches 'month'."""
-    return token[:-1] if len(token) > 3 and token.endswith("s") and not token.endswith("ss") else token
+    """Crude plural folding so 'months' matches 'month' and 'branches' matches 'branch'."""
+    if len(token) <= 3 or not token.endswith("s") or token.endswith(("ss", "us", "is")):
+        return token
+    if token.endswith(("ches", "shes", "xes", "sses")):
+        return token[:-2]
+    if token.endswith("ies"):
+        return token[:-3] + "y"
+    return token[:-1]
 
 
 def tokens(text: str) -> list[str]:
@@ -66,4 +87,5 @@ def tokens(text: str) -> list[str]:
 
 
 def content_tokens(text: str) -> list[str]:
-    return [t for t in tokens(text) if t not in STOPWORDS]
+    """Search tokens without stopwords (checked before folding, so 'does' is dropped, not 'doe')."""
+    return [stem(t) for t in _TOKEN.findall(text.lower()) if t not in STOPWORDS]

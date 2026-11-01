@@ -46,6 +46,17 @@ def coverage(index: Index, required: list[str], block: Block) -> float:
     return covered / total if total else 0.0
 
 
+def has_anchor(index: Index, required: list[str], block: Block) -> bool:
+    """The question's rarest topic word (the thing it names) must itself appear in the block;
+    otherwise a block about something else can pass on the common words alone."""
+    words = [t for t in required if not any(c.isdigit() for c in t)]  # amounts/terms are matched by qualifiers
+    if not words:
+        return True
+    anchor = max(sorted(set(words)), key=index.idf)
+    present = set(content_tokens(block.text))
+    return anchor in present or bool(present.intersection(ALIASES.get(anchor, ())))
+
+
 def with_aliases(query: list[str]) -> list[str]:
     return query + [alias for t in query for alias in ALIASES.get(t, ())]
 
@@ -81,7 +92,7 @@ def _score_candidates(index: Index, info: QuestionInfo, query: list[str]) -> lis
     for score, doc_id in index.search(with_aliases(query), CANDIDATES):
         block = index.blocks[doc_id]
         factor = info.fit(block, ignore_tiers=wants_list)
-        if not factor or coverage(index, required, block) < MIN_COVERAGE:
+        if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue

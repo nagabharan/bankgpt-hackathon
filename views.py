@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from bm25 import Index
 from blocks import Block, parse_page
 from contract import Snapshot
+from pressfacts import DatedFact, dated_facts
+from textnorm import clean
 
 # A block repeated on this many pages is site chrome (forms, country lists), not an answer.
 BOILERPLATE_MIN_PAGES = 8
@@ -17,6 +19,7 @@ class SnapshotView:
     snapshot_id: str
     taken_on: str
     index: Index
+    dated_facts: list[DatedFact]  # read from the raw pages, before boilerplate removal
 
 
 def canonical_url(url: str) -> str:
@@ -28,13 +31,15 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     seen: set[str] = set()
     blocks: list[Block] = []
     pages_per_text: dict[str, set[str]] = defaultdict(set)
+    facts: list[DatedFact] = []
     for page in snapshot.pages:
         url = canonical_url(page.url)
         if url in seen:
             continue
         seen.add(url)
+        facts += dated_facts(url, clean(page.markdown))
         for block in parse_page(url, page.markdown):
             pages_per_text[block.text].add(url)
             blocks.append(block)
     kept = [b for b in blocks if len(pages_per_text[b.text]) < BOILERPLATE_MIN_PAGES]
-    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, Index(kept))
+    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, Index(kept), facts)
