@@ -20,6 +20,7 @@ class SnapshotView:
     taken_on: str
     index: Index
     dated_facts: list[DatedFact]  # read from the raw pages, before boilerplate removal
+    twin_urls: dict[str, tuple[str, ...]]  # block text -> every page carrying exactly that text
 
 
 def canonical_url(url: str) -> str:
@@ -42,4 +43,5 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
             pages_per_text[block.text].add(url)
             blocks.append(block)
     kept = [b for b in blocks if len(pages_per_text[b.text]) < BOILERPLATE_MIN_PAGES]
-    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, Index(kept), facts)
+    twins = {text: tuple(sorted(urls)) for text, urls in pages_per_text.items() if 1 < len(urls) < BOILERPLATE_MIN_PAGES}
+    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, Index(kept), facts, twins)

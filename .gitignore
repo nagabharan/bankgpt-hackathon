@@ -21,3 +21,4 @@ __pycache__/
 .claude/
 .env
 reports/
+tools/report_content.py

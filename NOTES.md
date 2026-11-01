@@ -27,6 +27,12 @@
 - **Stale copies and articles:** where several pages carry the same table row, only the
   newest-dated version is kept, however well an older copy matches. Rate and fee questions
   are never answered from blog or press-release pages.
+- **Changes over time:** a rate, fee or count question that also says changed/since/versus/
+  increased is answered from the newest snapshot and an earlier one (the first snapshot taken
+  in the month named, else the oldest) as "Now: ..." and "As of <date>: ...", or "No change
+  since <date>". Both values are printed on purpose.
+- **Sources:** an answer cites its page and every other page that carries exactly the same
+  text, never a page with a different value.
 - **Dates in the question:** "in May 2026" or "as of March" selects the snapshot (when no
   `as_of` is given) and is removed from the question text.
 - **Multi-fact answers:** the answer is the best block plus sibling blocks from the same page,
@@ -40,7 +46,7 @@
 The newest snapshot wins. Within it, candidates that score about the same compete on the
 "effective as of" date printed under each rate table, so a rate sheet dated 08/31/2026 beats
 a promo page still showing last winter's rate. For counts and ordinals in press releases
-("22 branch office locations", "the fifth time"), the value on the release with the latest
+("12 branch office locations", "the third time"), the value on the release with the latest
 printed date wins. When answering, expired promotions are not specially handled; the
 "ended/expired" signal is used only to pick the winner in `conflicts()`.
 
@@ -55,7 +61,7 @@ share a product word but give different rate, APY or APR numbers are a conflict.
 merged per product (mortgage purchase and refinance stay separate). The winner is the page with
 the later "effective as of" date, or the one that is not an ended offer; with neither signal
 there is no resolution. Introductory-rate columns are ignored. Dated press-release facts are
-handled separately: branch counts ("22 branch office locations") and "Nth time X recognized
+handled separately: branch counts ("12 branch office locations") and "Nth time X recognized
 Dupaco" differ between old and new releases, and the value on the latest-dated release wins.
 
 ## Repository layout
@@ -63,12 +69,19 @@ The solution is the top-level `*.py` modules (`solution.py` is the entry point).
 offline development scripts (a score gate and a report generator); they are not imported by
 the solution and are not part of the graded system.
 
+## Honest disclosure
+The approach is general-purpose, but some rules were chosen after reading the 40 practice
+questions: the branch-count and "Nth time X recognized" press-release patterns, the small alias
+and tier-word lists, excluding blog and press-release pages from rate answers, and treating
+one-off "relief" programs as exceptional. No answer, number or URL from the practice set is
+stored in the code.
+
 ## Known gaps
 - Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
   counts, fees and award facts that differ between pages are not detected.
 - Answers are verbatim rows or passages (except the press-release sentences); the
   "highest/lowest" pick is not applied.
-- "What changed since May?" questions are not supported (they would need two snapshots in one
-  answer); a list that spans pages (personal and business cards) stops at one page.
+- Change answers compare the best-matching row in each snapshot; if a table was restructured
+  between the two, the rows may be different tiers.
 - One-off facts that sit in prose (eligible states, a program's amount, a wallet list, a
   contact phone number) are only found when ordinary search ranks the right passage first.

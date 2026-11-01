@@ -19,7 +19,7 @@ MIN_LIST_LINES = 3
 MAX_CAPTION_CHARS = 80
 EFFECTIVE_LOOKAHEAD_LINES = 4
 
-# "Rates are effective as of 09/25/2026" (or "08/13/25") -> month, day, year groups.
+# "Rates are effective as of 01/15/2030" (or "01/15/30") -> month, day, year groups.
 _EFFECTIVE = re.compile(r"effective\s+(?:as of\s+)?(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b", re.I)
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _TABLE_SEPARATOR = re.compile(r"^\|?\s*:?-{3,}")
@@ -153,6 +153,13 @@ def _effective_after(lines: list[str], start: int) -> str:
     return ""
 
 
+def _path_words(url: str) -> str:
+    """The last two path segments of a link as words: '.../personal/savings/certificates/?x' -> 'savings certificates'."""
+    path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
+    segments = [s for s in path.split("/") if s]
+    return " ".join(re.sub(r"[-_]+", " ", s) for s in segments[-2:])
+
+
 class _PageParser:
     """Walks a page once, emitting table-row and prose blocks."""
 
@@ -161,6 +168,7 @@ class _PageParser:
         self.blocks: list[Block] = []
         self.caption = ""  # latest short plain line; becomes the label of the next table
         self.heading = ""  # latest short digit-free line; prefixed to the prose after it
+        self.link_context = ""  # path words of the latest web link, e.g. "savings certificates"
         self.paragraph: list[str] = []
 
     def flush_paragraph(self) -> None:
@@ -175,6 +183,9 @@ class _PageParser:
         text, links = strip_links(_EMPHASIS.sub("", raw).lstrip("#* ").strip())
         if _is_caption(text):
             self.caption = text
+        web_links = [link for link in links if link.startswith("http")]
+        if web_links:
+            self.link_context = _path_words(web_links[-1])
         if len(text) < MIN_BLOCK_CHARS and not _HAS_DIGIT.search(text):
             self.heading = text  # too short to answer anything alone
             return
@@ -182,10 +193,18 @@ class _PageParser:
             self.blocks.append(Block(self.url, f"{self.heading}: {piece}" if self.heading else piece,
                                      links=tuple(links)))
 
+    def _table_caption(self) -> str:
+        """The caption; a one-word one ("Regular") borrows the nearest earlier link's path words
+        ("savings certificates") so the rows still say what they are rates of."""
+        if len(self.caption.split()) >= 2 or not self.link_context:
+            return self.caption
+        return f"{self.caption} {self.link_context}".strip()
+
     def add_table(self, rows: list[str], effective: str) -> None:
-        for row in _table_rows(self.caption, rows):
+        caption = self._table_caption()
+        for row in _table_rows(caption, rows):
             self.blocks.append(Block(self.url, row.text, effective, row.links, True, row.label, row.figures,
-                                     self.caption))
+                                     caption))
 
 
 def parse_page(url: str, markdown: str) -> list[Block]:

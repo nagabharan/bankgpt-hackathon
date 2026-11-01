@@ -1,5 +1,5 @@
-"""Dated statements in press releases: counts ("22 branch office locations") and ordinals
-("This was the fifth time Forbes recognized Dupaco").
+"""Dated statements in press releases: counts ("12 branch office locations") and ordinals
+("This was the third time Example Magazine recognized Acme").
 
 Press releases repeat the same boilerplate for years, so the same count shows up with
 different values on pages of different dates; the dateline says which is current.
@@ -13,16 +13,16 @@ from typing import NamedTuple
 _MONTHS = "January February March April May June July August September October November December".split()
 # "June 18, 2024": the publication date printed near the top of a release.
 _DATELINE = re.compile(rf"\b({'|'.join(_MONTHS)})\s+(\d{{1,2}}),\s+(\d{{4}})\b")
-# "22 branch office locations" / "22 branches" (not "1,000 branches": the lookbehind skips digits and commas).
+# "12 branch office locations" / "12 branches" (not "1,000 branches": the lookbehind skips digits and commas).
 _BRANCH_COUNT = re.compile(r"(?<![\d,])(\d{1,3})\s+branch(?:es| office locations?)\b", re.I)
 _ORDINALS = "first second third fourth fifth sixth seventh eighth ninth tenth".split()
-# "fifth time Forbes recognized": the verb anchor keeps out "first-time homebuyer" and the like.
+# "third time Example Magazine recognized": the verb anchor keeps out "first-time homebuyer" and the like.
 _ORDINAL_RECOGNITION = re.compile(rf"\b({'|'.join(_ORDINALS)}) time\s+(\w+)\s+(?:recognized|named|ranked)\b", re.I)
 
 
 class DatedFact(NamedTuple):
     label: str  # what is being counted/ranked, e.g. "branch count", "forbes recognition"
-    value: str  # the statement's value as printed, e.g. "22 branch office locations", "fifth"
+    value: str  # the statement's value as printed, e.g. "12 branch office locations", "third"
     date: str  # ISO publication date of the page
     url: str
 

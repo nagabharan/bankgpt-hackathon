@@ -17,6 +17,7 @@ NEAR_TIE = 0.9  # candidates within this share of the best score compete on fres
 HOURS_TIE = 0.6
 LIST_TIE = 0.5
 MAX_BLOCKS = 6
+MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
@@ -146,8 +147,12 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     best = blocks[max(contenders, key=lambda d: (blocks[d].effective, in_url(d)))]  # equals: best scored first
 
     tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
-    group = [doc_id for score, doc_id in scored
-             if score >= top * tie and blocks[doc_id].url == best.url
-             and blocks[doc_id].effective == best.effective and blocks[doc_id].is_row == best.is_row]
-    kept = sorted(group[:MAX_BLOCKS])  # the highest scored, shown in page order
-    return list(dict.fromkeys(blocks[d] for d in kept))
+    same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]
+    if several and best.is_row:  # a list may span pages and dates (personal and business cards)
+        asks_rate = bool(MONEY_WORDS.intersection(query))
+        group = [d for d in same_kind if blocks[d].figures or not asks_rate]  # a rate list holds rows with a rate
+    else:
+        group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].effective == best.effective]
+    kept = group[:MAX_LIST_BLOCKS if several else MAX_BLOCKS]  # the highest scored...
+    unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
+    return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
