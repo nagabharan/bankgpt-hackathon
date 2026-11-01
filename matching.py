@@ -6,7 +6,7 @@ import re
 
 from bm25 import Index
 from blocks import Block
-from qualifiers import QuestionInfo, parse_question
+from qualifiers import QuestionInfo, fact_key, parse_question
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
@@ -20,7 +20,7 @@ MAX_BLOCKS = 6
 MAX_LINKS = 3
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
-ALIASES = {"mortgage": ("home",), "cd": ("certificate",)}
+ALIASES = {"mortgage": ("home",), "cd": ("certificate",), "car": ("auto",), "vehicle": ("auto",)}
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 # Words that ask for a link or for every item, not topics.
@@ -31,10 +31,11 @@ _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
 # one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
-VALUE_SHAPES = {
-    **dict.fromkeys(("rate", "apr", "apy", "interest", "fee", "cost", "charge", "price"), _MONEY_OR_PERCENT),
-    "hour": _CLOCK_TIME,
-}
+# Blog articles and press releases discuss rates in general or years ago; they do not state this
+# credit union's current rate, so a rate/fee question is not answered from them.
+ARTICLE_PATHS = ("/learn/", "/newsroom/", "/blog/")
+MONEY_WORDS = frozenset(("rate", "apr", "apy", "interest", "fee", "cost", "charge", "price"))
+VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "hour": _CLOCK_TIME}
 
 
 def coverage(index: Index, required: list[str], block: Block) -> float:
@@ -107,12 +108,27 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
 
 
 def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool) -> list[tuple[float, int]]:
-    """A rate or fee question is answered by a table row when one qualifies; otherwise by any block."""
-    if any(t in VALUE_SHAPES for t in query):
-        rows = _qualifying(index, info, query, several, rows_only=True)
-        if rows:
-            return rows
-    return _qualifying(index, info, query, several, rows_only=False)
+    """A question about a rate, fee or price is answered by a table row when one qualifies;
+    otherwise (or for hours, policies) by any block, which may state the rate in prose."""
+    if not MONEY_WORDS.intersection(query):
+        return _drop_superseded(index, _qualifying(index, info, query, several, rows_only=False))
+    rows = _qualifying(index, info, query, several, rows_only=True)
+    if rows:
+        return _drop_superseded(index, rows)
+    prose = _qualifying(index, info, query, several, rows_only=False)  # a rate stated in a sentence
+    return [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
+
+
+def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tuple[float, int]]:
+    """Where several pages carry the same table row, keep only the newest-dated version, however
+    well an older copy matches the words: a stale page repeats the old tier labels and old rates."""
+    newest: dict[tuple[str, str], str] = {}
+    for _, doc_id in scored:
+        block = index.blocks[doc_id]
+        key = fact_key(block)
+        newest[key] = max(newest.get(key, ""), block.effective)
+    return [(s, d) for s, d in scored
+            if not index.blocks[d].effective or index.blocks[d].effective == newest[fact_key(index.blocks[d])]]
 
 
 def select_blocks(index: Index, question: str) -> list[Block]:
@@ -126,7 +142,8 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     top = scored[0][0]
     blocks = index.blocks
     contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
-    best = blocks[max(contenders, key=lambda d: blocks[d].effective)]  # first of equals = best scored
+    in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(query))  # the page named for the topic
+    best = blocks[max(contenders, key=lambda d: (blocks[d].effective, in_url(d)))]  # equals: best scored first
 
     tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
     group = [doc_id for score, doc_id in scored

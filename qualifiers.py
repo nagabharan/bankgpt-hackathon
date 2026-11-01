@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 
 from blocks import Block
-from textnorm import stem
+from textnorm import content_tokens, stem
 
 # "60 Months", "30-Year", "17 Month": number then a unit; stored in months.
 _TERM = re.compile(r"(?<![\d.])\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b(?!\s*old)", re.I)
@@ -24,6 +24,22 @@ EXCEPTIONAL_TIER_FACTOR = 0.2
 WRONG_TIER_FACTOR = 0.5  # block names a tier the question did not ask for
 MISSING_TIER_FACTOR = 0.3  # question names a tier the block lacks
 NO_YEAR_RANGE_FACTOR = 0.5  # question gives a model year but the block has no year range
+
+
+# Caption words that name no product, so sharing them proves nothing.
+GENERIC_CAPTION_WORDS = frozenset({"loan", "rate", "account", "special", "certificate"})
+
+
+def caption_words(block: Block) -> frozenset[str]:
+    return frozenset(t for t in content_tokens(block.caption) if t not in GENERIC_CAPTION_WORDS)
+
+
+def fact_key(block: Block) -> tuple[str, str]:
+    """What a table row is a value of: its product word and its tier label with model-year ranges
+    removed ("2023-26 model year | 60 months" and "2021-23 model year | 60 months" are the same
+    fact on a stale and on a current page)."""
+    words = sorted(caption_words(block))
+    return (words[0] if words else "", YEAR_SPAN.sub("", block.label.lower()))
 
 
 def terms_in(text: str) -> frozenset[int]:

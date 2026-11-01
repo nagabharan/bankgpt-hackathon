@@ -15,12 +15,9 @@ from typing import NamedTuple, Optional
 from blocks import Block
 from contract import Conflict, Source
 from pressfacts import DatedFact
-from qualifiers import YEAR_SPAN, terms_in, year_spans_in
-from textnorm import content_tokens
+from qualifiers import YEAR_SPAN, caption_words, terms_in, year_spans_in
 from views import SnapshotView
 
-# Caption words that name no product, so sharing them proves nothing.
-GENERIC_CAPTION_WORDS = frozenset({"loan", "rate", "account", "special", "certificate"})
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _AMOUNT_BAND = re.compile(r"\$\d+(?:\.\d+)?(?:\s*-\s*\$\d+(?:\.\d+)?)?\+?(?:\s+or less)?")
 _SPACES = re.compile(r"[\s|]+")
@@ -40,10 +37,6 @@ class _Fact(NamedTuple):
 
 def _number(cell: str) -> float:
     return float(_NUMBER.search(cell.replace(",", "")).group())
-
-
-def _caption_words(block: Block) -> frozenset[str]:
-    return frozenset(t for t in content_tokens(block.caption) if t not in GENERIC_CAPTION_WORDS)
 
 
 def _tier_ranks(rows: list[Block]) -> dict[tuple[str, str], list[int]]:
@@ -72,7 +65,7 @@ def _term_signature(label: str) -> str:
 def _row_facts(blocks: list[Block]) -> list[_Fact]:
     rows = [b for b in blocks if b.is_row and b.figures]
     ranks = _tier_ranks(rows)
-    return [_Fact(row, _number(cell), kind, _aligned_label(row, ranks), _caption_words(row))
+    return [_Fact(row, _number(cell), kind, _aligned_label(row, ranks), caption_words(row))
             for row in rows for kind, cell in row.figures]
 
 

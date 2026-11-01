@@ -22,7 +22,13 @@
   qualifies. A plural topic noun ("cards", "rates") or a word like "all"/"offer" asks for
   several rows.
 - **Press-release facts:** "how many branches" and "what recognition from <org>" are answered
-  from the value on the latest-dated release, as one short sentence.
+  from the value on the latest-dated release, as one short sentence, and only when the
+  question is about Dupaco.
+- **Stale copies and articles:** where several pages carry the same table row, only the
+  newest-dated version is kept, however well an older copy matches. Rate and fee questions
+  are never answered from blog or press-release pages.
+- **Dates in the question:** "in May 2026" or "as of March" selects the snapshot (when no
+  `as_of` is given) and is removed from the question text.
 - **Multi-fact answers:** the answer is the best block plus sibling blocks from the same page,
   date and kind that score nearly as well (all the matching 30-year mortgage rows, every
   line of a lobby-hours schedule, every card for "what cards do you offer"), at most six, in
@@ -33,8 +39,13 @@
 ## Deciding what is current
 The newest snapshot wins. Within it, candidates that score about the same compete on the
 "effective as of" date printed under each rate table, so a rate sheet dated 08/31/2026 beats
-a promo page still showing last winter's rate. Expired promotions and press-release dates
-are not handled yet; this file will be updated as they land.
+a promo page still showing last winter's rate. For counts and ordinals in press releases
+("22 branch office locations", "the fifth time"), the value on the release with the latest
+printed date wins. When answering, expired promotions are not specially handled; the
+"ended/expired" signal is used only to pick the winner in `conflicts()`.
+
+`as_of` selects the newest snapshot taken on or before that date (ISO or M/D/YYYY); an
+unreadable date is treated as "now", and a date before the first snapshot gets "isn't listed".
 
 ## Conflicts
 `conflicts()` looks only at the latest snapshot. It compares table rows by their tier cells
@@ -47,10 +58,17 @@ there is no resolution. Introductory-rate columns are ignored. Dated press-relea
 handled separately: branch counts ("22 branch office locations") and "Nth time X recognized
 Dupaco" differ between old and new releases, and the value on the latest-dated release wins.
 
+## Repository layout
+The solution is the top-level `*.py` modules (`solution.py` is the entry point). `tools/` holds
+offline development scripts (a score gate and a report generator); they are not imported by
+the solution and are not part of the graded system.
+
 ## Known gaps
 - Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
   counts, fees and award facts that differ between pages are not detected.
 - Answers are verbatim rows or passages (except the press-release sentences); the
   "highest/lowest" pick is not applied.
+- "What changed since May?" questions are not supported (they would need two snapshots in one
+  answer); a list that spans pages (personal and business cards) stops at one page.
 - One-off facts that sit in prose (eligible states, a program's amount, a wallet list, a
   contact phone number) are only found when ordinary search ranks the right passage first.

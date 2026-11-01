@@ -40,6 +40,17 @@ _HOW_MANY_BRANCHES = re.compile(r"\b(?:how many|number of|count of)\b[^?]*\bbran
 _RECOGNITION_WORDS = re.compile(r"recogni|award|honou?r|named|ranked|ranking", re.I)
 
 
+_CAPITALISED = re.compile(r"\b[A-Z][\w&'-]*")
+_ALWAYS_ALLOWED = frozenset({"dupaco", "i"})
+
+
+def _names_another_organisation(question: str, recognisers: set[str]) -> bool:
+    """True when the question has a capitalised name (after its first word) that is neither Dupaco
+    nor the organisation being asked about: the facts here are about Dupaco only."""
+    names = [m.group(0).lower() for m in _CAPITALISED.finditer(question) if m.start() > 0]
+    return any(n not in _ALWAYS_ALLOWED and n not in recognisers for n in names)
+
+
 def answer_from_facts(question: str, facts: list[DatedFact]) -> DatedFact | None:
     """The latest-dated fact that the question asks about, or None.
 
@@ -47,6 +58,8 @@ def answer_from_facts(question: str, facts: list[DatedFact]) -> DatedFact | None
     asks for the ordinal for that organisation. Old pages keep repeating superseded values,
     so the value on the newest page wins."""
     wanted = None
+    if _names_another_organisation(question, {f.label.removesuffix(" recognition") for f in facts}):
+        return None
     if _HOW_MANY_BRANCHES.search(question):
         wanted = "branch count"
     elif _RECOGNITION_WORDS.search(question):

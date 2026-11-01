@@ -289,6 +289,45 @@ STAGES = [
              ("What happens when no table row qualifies?",
               "The search falls back to every block, as before.")],
     ),
+    dict(
+        slug="08-independent-test-fixes",
+        title="Fixes from an independent 168-question test",
+        labels=["stagefixes"],
+        summary="Subject check, newest-copy-wins for repeated table rows, filler words and synonyms, dates written in the question, "
+                "and no rate answers from blog or press-release pages.",
+        files=["pressfacts.py", "matching.py", "qualifiers.py", "askdate.py", "solution.py", "textnorm.py", "conflicts.py"],
+        idea="A reviewer wrote 168 questions of their own (not the practice set). They found answers that ignored the question's "
+             "subject, stale rows beating fresh ones outside the tie band, filler words knocking out the right rows, dates in the "
+             "text being ignored, and unanswerable rate questions answered from articles.",
+        changed={"facts", "qualifiers", "checks", "rank", "snapshot"},
+        decisions=["Stage test fixes: subject check, superseded rows, derived dates, no prose fallback for rates"],
+        whys=[
+            ("Why did \"How many branches does Wells Fargo have?\" say Dupaco has 22?",
+             "Only the organisation that recognises was checked, never whose branches were asked about."),
+            ("Why did a 2023-model auto loan return the stale 5.34%?",
+             "The stale row scored 23.9 against 19.1 for the fresh one, outside the 0.9 tie band, so freshness never compared them."),
+            ("Why compare freshness by identical row instead of widening the band?",
+             "A wider band lets near matches of different products compete; the same row on two pages is the same fact."),
+            ("Why did my first fix break the selftest?",
+             "It refused any rate without a table row, but the selftest (and two practice questions) state rates in sentences."),
+            ("Why exclude blog pages instead?",
+             "The task warns that blogs and press releases describe old offers; auto-insurance and bridge-loan articles were the leaks."),
+        ],
+        examples=[("How many branches does Wells Fargo have?", None, "Dupaco has 22 branch office locations."),
+                  ("60-month auto loan on a 2023 vehicle?", None, "Auto Loan Rates | Account Type 2023-26 Model Year | ... 5.34% ..."),
+                  ("What was the 10-month jumbo certificate rate in May 2026?", None, "(newest value, 4.00%)"),
+                  ("Interest rate on a bridge loan", None, "Bridge loans: A bridge loan is a short-term loan that gives ... 90%"),
+                  ("What are your current mortgage rates?", None, "bridge-loan prose: borrow up to 90%")],
+        gaps=["\"What changed since May\" questions are not supported.",
+              "A list that spans pages (personal and business credit cards) stops at one page.",
+              "A question with no rate word (\"60-month auto loan for a 2015 vehicle\") can still fall back to an example paragraph."],
+        faq=[("How was the independent test run?",
+              "A reviewer with a shell wrote 168 questions across consistency, refusals, dates and forbidden values; the public set has no such probes."),
+             ("Is excluding /learn/ pages safe?",
+              "Only for rate and fee questions; hours and policy questions can still use them."),
+             ("Why does \"today (October 2026)\" stay in the question?",
+              "A date after the newest snapshot is today's date, not a snapshot to look up.")],
+    ),
 ]
 
 # Flow nodes: id, label, row (ingest / answer), column.
