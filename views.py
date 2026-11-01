@@ -39,7 +39,7 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
             continue
         seen.add(url)
         facts += dated_facts(url, clean(page.markdown))
-        for block in parse_page(url, page.markdown):
+        for block in parse_page(url, page.markdown, page.title):
             pages_per_text[block.text].add(url)
             blocks.append(block)
     kept = [b for b in blocks if len(pages_per_text[b.text]) < BOILERPLATE_MIN_PAGES]

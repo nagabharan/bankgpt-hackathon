@@ -37,6 +37,7 @@ COLUMN_KINDS = (
 _INTRO_COLUMN = re.compile(r"1st \d+ months?|introductory", re.I)
 FIGURE_KINDS = frozenset({"apy", "apr", "rate"})  # the columns whose values can contradict each other
 _EMPHASIS = re.compile(r"\*\*|__")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*\S)")
 _HAS_DIGIT = re.compile(r"\d")
 
 
@@ -50,6 +51,7 @@ class Block:
     label: str = ""  # rows only: which row of its table (section, tier cells)
     figures: tuple[tuple[str, str], ...] = ()  # rows only: (column kind, cell) per rate/APY/APR cell
     caption: str = ""  # rows only: the table's title, which varies between pages
+    context: str = ""  # page title, URL path words and nearest H1 > H2: searchable, never shown
 
 
 def _iso(match: re.Match) -> str:
@@ -153,6 +155,12 @@ def _effective_after(lines: list[str], start: int) -> str:
     return ""
 
 
+def _all_path_words(url: str) -> str:
+    """Every path segment of a page URL as words: '/personal/loans/auto-loans' -> 'personal loans auto loans'."""
+    path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
+    return " ".join(re.sub(r"[-_]+", " ", s) for s in path.split("/") if s)
+
+
 def _path_words(url: str) -> str:
     """The last two path segments of a link as words: '.../personal/savings/certificates/?x' -> 'savings certificates'."""
     path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
@@ -163,8 +171,11 @@ def _path_words(url: str) -> str:
 class _PageParser:
     """Walks a page once, emitting table-row and prose blocks."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, title: str = "") -> None:
         self.url = url
+        self.page_words = f"{title} {_all_path_words(url)}".strip()  # what the page is, for every block on it
+        self.context = self.page_words  # plus the nearest H1 > H2 headings once seen
+        self.h1 = self.h2 = ""
         self.blocks: list[Block] = []
         self.caption = ""  # latest short plain line; becomes the label of the next table
         self.heading = ""  # latest short digit-free line; prefixed to the prose after it
@@ -191,7 +202,16 @@ class _PageParser:
             return
         for piece in _prose_pieces(text):
             self.blocks.append(Block(self.url, f"{self.heading}: {piece}" if self.heading else piece,
-                                     links=tuple(links)))
+                                     links=tuple(links), context=self.context))
+
+    def note_heading(self, level: int, text: str) -> None:
+        """Track the nearest H1 and H2 (deeper headings count as H2) for the blocks that follow."""
+        text = _EMPHASIS.sub("", text).strip()
+        if level == 1:
+            self.h1, self.h2 = text, ""
+        else:
+            self.h2 = text
+        self.context = " ".join(p for p in (self.page_words, self.h1, self.h2) if p)
 
     def _table_caption(self) -> str:
         """The caption; a one-word one ("Regular") borrows the nearest earlier link's path words
@@ -204,12 +224,12 @@ class _PageParser:
         caption = self._table_caption()
         for row in _table_rows(caption, rows):
             self.blocks.append(Block(self.url, row.text, effective, row.links, True, row.label, row.figures,
-                                     caption))
+                                     caption, self.context))
 
 
-def parse_page(url: str, markdown: str) -> list[Block]:
+def parse_page(url: str, markdown: str, title: str = "") -> list[Block]:
     lines = clean(markdown).splitlines()
-    parser = _PageParser(url)
+    parser = _PageParser(url, title)
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -223,6 +243,9 @@ def parse_page(url: str, markdown: str) -> list[Block]:
                 parser.add_table(rows, _effective_after(lines, i))
             continue
         if line:
+            heading = _HEADING.match(line)
+            if heading:
+                parser.note_heading(len(heading.group(1)), heading.group(2))  # boundaries stay as they were
             parser.paragraph.append(line)
         else:
             parser.flush_paragraph()

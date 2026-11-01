@@ -21,7 +21,12 @@ MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
-ALIASES = {"mortgage": ("home",), "cd": ("certificate",), "car": ("auto",), "vehicle": ("auto",)}
+ALIASES = {
+    "mortgage": ("home",), "cd": ("certificate",), "car": ("auto",), "vehicle": ("auto",),
+    "eligible": ("member", "membership"), "eligibility": ("member", "membership"), "join": ("member", "membership"),
+    "student": ("college", "university"), "college": ("student", "university"), "university": ("student", "college"),
+    "cost": ("fee", "price"), "wallet": ("payment", "pay"),
+}
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 # Words that ask for a link or for every item, not topics.
@@ -35,13 +40,23 @@ _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # Blog articles and press releases discuss rates in general or years ago; they do not state this
 # credit union's current rate, so a rate/fee question is not answered from them.
 ARTICLE_PATHS = ("/learn/", "/newsroom/", "/blog/")
-MONEY_WORDS = frozenset(("rate", "apr", "apy", "interest", "fee", "cost", "charge", "price"))
+RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
+MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
+# A percent within a few words of a rate word, either order: "APY: 3.50%", "2.90% introductory annual percentage rate".
+_PERCENT = r"\d+(?:\.\d+)?%"
+_RATE_TERM = r"(?:rate|apr|apy|interest|yield|dividend)"
+_RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{_PERCENT}\W+(?:\w+\W+){{0,6}}?{_RATE_TERM}", re.I)
 VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "hour": _CLOCK_TIME}
+
+
+def block_words(block: Block) -> set[str]:
+    """What the block is about: its own words plus its page's title, URL and headings."""
+    return set(content_tokens(block.text)) | set(content_tokens(block.context))
 
 
 def coverage(index: Index, required: list[str], block: Block) -> float:
     """Fraction of the required tokens' idf mass that appears in the block (aliases count)."""
-    present = set(content_tokens(block.text))
+    present = block_words(block)
     wanted = {t: index.idf(t) for t in sorted(set(required))}  # sorted: float sums stay hash-seed independent
     total = sum(wanted.values())
     covered = sum(w for t, w in wanted.items() if t in present or present.intersection(ALIASES.get(t, ())))
@@ -55,7 +70,7 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
     if not words:
         return True
     anchor = max(sorted(set(words)), key=index.idf)
-    present = set(content_tokens(block.text))
+    present = block_words(block)
     return anchor in present or bool(present.intersection(ALIASES.get(anchor, ())))
 
 
@@ -64,7 +79,14 @@ def with_aliases(query: list[str]) -> list[str]:
 
 
 def has_asked_value(query: list[str], block: Block) -> bool:
-    return all(shape.search(block.text) for word, shape in VALUE_SHAPES.items() if word in query)
+    for word, shape in VALUE_SHAPES.items():
+        if word not in query:
+            continue
+        if not shape.search(block.text):
+            return False
+        if word in RATE_WORDS and not block.is_row and not _RATE_NEAR_PERCENT.search(block.text):
+            return False  # a sentence must tie the percent to a rate ("80% of costs" is not a rate)
+    return True
 
 
 def _host(url: str) -> str:

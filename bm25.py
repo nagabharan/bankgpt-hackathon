@@ -10,22 +10,27 @@ from textnorm import content_tokens
 
 K1 = 1.2
 B = 0.75
+CONTEXT_TF = 0.15  # a word of the page title/URL/headings counts this much of a word in the block text
 
 
 class Index:
     def __init__(self, blocks: list[Block]) -> None:
         self.blocks = blocks
-        self._postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        self._postings: dict[str, list[tuple[int, float]]] = defaultdict(list)
+        self._text_df: Counter = Counter()  # blocks whose own text has the word (the context does not count)
         self._lengths: list[int] = []
         for doc_id, block in enumerate(blocks):
-            counts = Counter(content_tokens(block.text))
-            self._lengths.append(sum(counts.values()))
+            counts: Counter = Counter(content_tokens(block.text))
+            self._text_df.update(counts.keys())
+            self._lengths.append(sum(counts.values()))  # the context does not lengthen the block
+            for token in set(content_tokens(block.context)):
+                counts[token] += CONTEXT_TF
             for token, tf in counts.items():
                 self._postings[token].append((doc_id, tf))
         self._avg_length = (sum(self._lengths) / len(blocks)) if blocks else 0.0
 
     def idf(self, token: str) -> float:
-        df = len(self._postings.get(token, ()))
+        df = self._text_df.get(token, 0)
         return math.log(1 + (len(self.blocks) - df + 0.5) / (df + 0.5))
 
     def search(self, query_tokens: list[str], limit: int = 10, rows_only: bool = False) -> list[tuple[float, int]]:
