@@ -1,4 +1,22 @@
+# local planning and score history (not part of the submission)
 PLAN.md
+DECISIONS.md
+SCORES.md
+tools/baseline.json
+
+# scorer output and scratch
+results/
+*.log
+
+# python
 __pycache__/
 *.pyc
+.venv/
+.pytest_cache/
+
+# editor / OS / local tooling
 .DS_Store
+.idea/
+.vscode/
+.claude/
+.env

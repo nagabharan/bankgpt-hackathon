@@ -39,7 +39,9 @@ def run_eval(out: Path, seed: str, selftest: bool = False) -> dict:
     else:
         cmd += ["--eval", "eval/public_eval.jsonl"]
     env = {**os.environ, "PYTHONHASHSEED": seed}
-    subprocess.run(cmd, cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
+    if result.returncode:
+        sys.exit(f"scorer crashed:\n{result.stderr[-1500:]}")
     return json.loads((out / "report.json").read_text())
 
 
@@ -102,12 +104,15 @@ def main() -> int:
     ap.add_argument("label")
     ap.add_argument("note", nargs="?", default="")
     ap.add_argument("--accept", action="store_true", help="on pass, make this run the new baseline")
+    ap.add_argument("--rebaseline", action="store_true",
+                    help="ignore the old baseline (it came from a system that never answered) and accept")
     args = ap.parse_args()
+    args.accept |= args.rebaseline
 
     report = run_eval(OUT / "seed0", "0")
     run_eval(OUT / "seed1", "1")  # only its answers are compared, for determinism
     selftest = run_eval(OUT / "selftest", "0", selftest=True)
-    baseline = json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
+    baseline = json.loads(BASELINE.read_text()) if BASELINE.exists() and not args.rebaseline else {}
 
     failures = check(report, baseline, answers(OUT / "seed0") == answers(OUT / "seed1"))
     log_row(args.label, args.note, report, selftest, failures)
