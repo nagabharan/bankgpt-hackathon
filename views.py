@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from typing import Optional
 
 from bm25 import Index
 from blocks import Block, parse_page
@@ -11,6 +12,7 @@ from contract import Snapshot
 from expiry import is_expired, page_looks_expired
 from pressfacts import DatedFact, dated_facts
 from segments import page_prior
+from sentences import build_index as build_sentence_index
 from textnorm import STOPWORDS, clean, content_tokens, strip_links
 
 # A block repeated on this many pages is site chrome (forms, country lists), not an answer.
@@ -24,6 +26,7 @@ class SnapshotView:
     index: Index
     dated_facts: list[DatedFact]  # read from the raw pages, before boilerplate removal
     twin_urls: dict[str, tuple[str, ...]]  # block text -> every page carrying exactly that text
+    sentences: Optional[Index] = None  # sentence windows of the long passages, for questions the whole passage buries
 
 
 def canonical_url(url: str) -> str:
@@ -56,7 +59,8 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     index = Index(kept)
     index.page_prior = _page_priors(blocks, seen)
     index.acronyms = acronyms_defined(texts, index)
-    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins)
+    sentences = build_sentence_index(kept, index.page_prior, index.acronyms)
+    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins, sentences)
 
 
 def _page_priors(blocks: list[Block], pages: set[str]) -> dict[str, float]:

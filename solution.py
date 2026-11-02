@@ -16,9 +16,12 @@ from askdate import split_date
 from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
+from evidence import kind_for
 from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, duration_notes, focused_lines, links_of, select_blocks, trim_blocks, with_body, with_steps
 from pressfacts import answer_from_facts, sentence_for
+from sentences import better_than, select_sentences
 from qualifiers import parse_question
+from schedules import asks_schedules
 from textnorm import clean, content_tokens, normalize_question
 from views import SnapshotView, build_view
 
@@ -95,6 +98,10 @@ class KnowledgeBase:
                 return Answer(text=f"You can do that online here: {link}",
                               sources=[Source(link, view.snapshot_id, link)])
         blocks = select_blocks(view.index, question) if view else []
+        if view and view.sentences is not None and not kind_for(question) and not asks_schedules(question):
+            found = select_sentences(view.sentences, question)
+            if better_than(view.index, blocks, found, question):
+                blocks = found
         if not blocks:
             return Answer(text=NOT_LISTED, confident=False)
         future = [y for y in calendar_years if y > int(newest[:4])]
