@@ -16,6 +16,7 @@ from blocks import Block
 from contract import Conflict, Source
 from pressfacts import DatedFact
 from qualifiers import YEAR_SPAN, caption_words, terms_in, year_spans_in
+from segments import authority, page_type
 from views import SnapshotView
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
@@ -72,8 +73,8 @@ def _row_facts(blocks: list[Block]) -> list[_Fact]:
 def _prose_facts(blocks: list[Block]) -> list[_Fact]:
     facts = []
     for block in blocks:
-        if block.is_row:
-            continue
+        if block.is_row or page_type(block.url) in ("blog", "news"):
+            continue  # a blog or press release is not a product claim; dated press facts have their own path
         for number, unit, words, kind, value in _PROSE_FACT.findall(block.text):
             facts.append(_Fact(block, float(value), kind.lower(), f"{number}-{unit.lower()}",
                                frozenset(words.lower().split()), bool(_ENDED.search(block.text))))
@@ -81,12 +82,16 @@ def _prose_facts(blocks: list[Block]) -> list[_Fact]:
 
 
 def _winner(a: _Fact, b: _Fact) -> Optional[_Fact]:
-    """The fact that is current, or None when nothing says: a later effective date (both pages
-    dated) or the other statement being an ended/expired offer."""
-    if a.block.effective and b.block.effective and a.block.effective != b.block.effective:
-        return a if a.block.effective > b.block.effective else b
+    """The fact that is current, or None when nothing says: the later date (both blocks dated), the
+    other statement being an ended/expired offer, or the more authoritative page type."""
+    fa, fb = a.block.freshness, b.block.freshness
+    if fa and fb and fa != fb:
+        return a if fa > fb else b
     if a.expired != b.expired:
         return b if a.expired else a
+    ra, rb = authority(a.block.url), authority(b.block.url)
+    if ra != rb:  # undated: the product or rate page beats a calculator, a blog, a news article
+        return a if ra > rb else b
     return None
 
 

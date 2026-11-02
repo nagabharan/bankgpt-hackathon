@@ -37,6 +37,7 @@ def page_type(url: str) -> str:
 
 _NEWS = re.compile(r"\b(?:recogni\w+|award\w*|ranked|ranking|clos(?:e|ed|es|ing|ure)|announc\w+|partnership|volunteer\w*)\b", re.I)
 _CONTACT = re.compile(r"\b(?:phone|call|hours?|address|located|location|lobby|drive-up|atm|branch\w*|routing)\b", re.I)
+_POLICY = re.compile(r"\b(?:policy|policies|terms|rules?|overdraft|disputes?|penalt\w*|grace period|waive\w*|limits?|deadline)\b", re.I)
 _MEMBERSHIP = re.compile(r"\b(?:eligib\w*|join|become a member|membership|member)\b", re.I)
 
 # intent -> (preferred page types, disfavoured page types)
@@ -45,6 +46,7 @@ SEGMENTS = {
     "news": ({"news"}, {"calculator"}),
     "contact": ({"service"}, {"blog", "calculator"}),
     "membership": ({"service", "product"}, {"blog", "news"}),
+    "policy": ({"product", "service", "document"}, {"blog", "news"}),
     "general": (set(), set()),
 }
 
@@ -58,6 +60,8 @@ def intent_of(question: str, asks_money: bool) -> str:
         return "contact"
     if _MEMBERSHIP.search(question):
         return "membership"
+    if _POLICY.search(question):
+        return "policy"
     return "general"
 
 
@@ -65,3 +69,11 @@ def segment_factor(intent: str, url: str) -> float:
     preferred, avoided = SEGMENTS[intent]
     kind = page_type(url)
     return PREFERRED_FACTOR if kind in preferred else AVOIDED_FACTOR if kind in avoided else 1.0
+
+
+# How much a page type can be trusted to state this credit union's own current terms.
+AUTHORITY = {"rates": 4, "product": 3, "service": 2, "document": 2, "blog": 1, "news": 1, "calculator": 0}
+
+
+def authority(url: str) -> int:
+    return AUTHORITY[page_type(url)]

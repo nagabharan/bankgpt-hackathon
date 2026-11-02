@@ -10,6 +10,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Iterator, NamedTuple
 
+from pagedate import page_date
 from textnorm import MONEY_MARK, clean, strip_links
 
 MAX_PROSE_CHARS = 400
@@ -52,6 +53,12 @@ class Block:
     figures: tuple[tuple[str, str], ...] = ()  # rows only: (column kind, cell) per rate/APY/APR cell
     caption: str = ""  # rows only: the table's title, which varies between pages
     context: str = ""  # page title, URL path words and nearest H1 > H2: searchable, never shown
+    page_date: str = ""  # the date the page states for itself ("" when it states none)
+
+    @property
+    def freshness(self) -> str:
+        """How current this block's content is: its table's effective date, else its page's date."""
+        return self.effective or self.page_date
 
 
 def _iso(match: re.Match) -> str:
@@ -171,8 +178,9 @@ def _path_words(url: str) -> str:
 class _PageParser:
     """Walks a page once, emitting table-row and prose blocks."""
 
-    def __init__(self, url: str, title: str = "") -> None:
+    def __init__(self, url: str, title: str = "", published: str = "") -> None:
         self.url = url
+        self.published = published
         self.page_words = f"{title} {_all_path_words(url)}".strip()  # what the page is, for every block on it
         self.context = self.page_words  # plus the nearest H1 > H2 headings once seen
         self.h1 = self.h2 = ""
@@ -202,7 +210,7 @@ class _PageParser:
             return
         for piece in _prose_pieces(text):
             self.blocks.append(Block(self.url, f"{self.heading}: {piece}" if self.heading else piece,
-                                     links=tuple(links), context=self.context))
+                                     links=tuple(links), context=self.context, page_date=self.published))
 
     def note_heading(self, level: int, text: str) -> None:
         """Track the nearest H1 and H2 (deeper headings count as H2) for the blocks that follow."""
@@ -224,12 +232,12 @@ class _PageParser:
         caption = self._table_caption()
         for row in _table_rows(caption, rows):
             self.blocks.append(Block(self.url, row.text, effective, row.links, True, row.label, row.figures,
-                                     caption, self.context))
+                                     caption, self.context, self.published))
 
 
 def parse_page(url: str, markdown: str, title: str = "") -> list[Block]:
     lines = clean(markdown).splitlines()
-    parser = _PageParser(url, title)
+    parser = _PageParser(url, title, page_date(markdown))
     i = 0
     while i < len(lines):
         line = lines[i].strip()

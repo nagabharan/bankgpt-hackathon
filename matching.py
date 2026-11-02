@@ -8,6 +8,7 @@ from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question
+from schedules import compares_hours, distinct_schedules
 from segments import intent_of, segment_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
@@ -151,10 +152,12 @@ def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tupl
     newest: dict[tuple[str, str], str] = {}
     for _, doc_id in scored:
         block = index.blocks[doc_id]
-        key = fact_key(block)
-        newest[key] = max(newest.get(key, ""), block.effective)
+        if block.is_row:
+            key = fact_key(block)
+            newest[key] = max(newest.get(key, ""), block.freshness)
     return [(s, d) for s, d in scored
-            if not index.blocks[d].effective or index.blocks[d].effective == newest[fact_key(index.blocks[d])]]
+            if not index.blocks[d].is_row or not index.blocks[d].freshness
+            or index.blocks[d].freshness == newest[fact_key(index.blocks[d])]]
 
 
 EVIDENCE_CANDIDATES = 1000
@@ -185,6 +188,10 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
     text = clean(question)
     query = content_tokens(text)
+    if compares_hours(question):
+        schedules = distinct_schedules(index, question)
+        if schedules:
+            return list({block.text: block for block in schedules}.values())
     kind = kind_for(question)
     intent = intent_of(question, bool(MONEY_WORDS.intersection(query)))
     if kind is not None and not MONEY_WORDS.intersection(query):
@@ -199,7 +206,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     blocks = index.blocks
     contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
     in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(query))  # the page named for the topic
-    best = blocks[max(contenders, key=lambda d: (blocks[d].effective, in_url(d)))]  # equals: best scored first
+    best = blocks[max(contenders, key=lambda d: (blocks[d].freshness, in_url(d)))]  # equals: best scored first
 
     tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
     same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]
@@ -207,7 +214,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
         asks_rate = bool(MONEY_WORDS.intersection(query))
         group = [d for d in same_kind if blocks[d].figures or not asks_rate]  # a rate list holds rows with a rate
     else:
-        group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].effective == best.effective]
+        group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].freshness == best.freshness]
     kept = group[:MAX_LIST_BLOCKS if several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
     return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
