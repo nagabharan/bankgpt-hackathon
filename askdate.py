@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar
 import re
+from datetime import date
 from typing import Optional
 
 from textnorm import MONTHS
@@ -20,6 +21,12 @@ _SHORT_DATE = re.compile(r"\b(?:as of|on|around|by|since|for)\s+(?P<m>\d{1,2})/(
 # The last day of each season: "in spring" asks for what the site said by the end of May.
 _SEASON_END = {"spring": (5, 31), "summer": (8, 31), "fall": (11, 30), "autumn": (11, 30), "winter": (2, 28)}
 _SEASON_PHRASE = re.compile(r"\b(?:as of|in|during)\s+(?:(?:the|last|this|past)\s+)?(?P<season>spring|summer|fall|autumn|winter)\b", re.I)
+
+
+def long_date(iso: str) -> str:
+    """'2026-06-09' -> 'June 9, 2026'."""
+    day = date.fromisoformat(iso)
+    return f"{day:%B} {day.day}, {day.year}"
 
 
 def split_date(question: str, default_year: int) -> tuple[str, Optional[str]]:

@@ -9,6 +9,7 @@ import calendar
 import re
 from typing import Optional
 
+from askdate import long_date
 from blocks import Block
 from conflicts import _tier_ranks
 from contract import Source
@@ -27,7 +28,7 @@ _REFERENCE = re.compile(rf"\b(?:since|after|from|in|as of|during|versus|vs\.?|co
 _MONTH_WORD = re.compile(rf"\b(?:{'|'.join(MONTHS)})(?:\s+\d{{4}})?\b")
 
 
-_STRONG_CHANGE = re.compile(r"\b(?:chang(?:ed|es)|since|between|versus|vs\.?|compared? (?:to|with))\b", re.I)
+_STRONG_CHANGE = re.compile(r"\b(?:chang(?:ed|es)|since|between|versus|vs\.?|compared? (?:to|with)|happen(?:ed|s)? to|(?:went|go|goes|gone|going) (?:up|down))\b", re.I)
 _PRODUCT_WORDS = frozenset("certificate special savings checking loan mortgage ira card".split())
 _HOW_MANY = re.compile(r"\b(?:how many|number of|count of)\b", re.I)
 _SEASONS = {"spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12}
@@ -102,7 +103,7 @@ def _topic(question: str) -> str:
     question = _NAMED_DAY.sub(" ", question)
     question = _SEASON_REFERENCE.sub(" ", _REFERENCE.sub(" ", question))
     question = _MONTH_WORD.sub(" ", question)
-    question = re.sub(r"\b(?:between|snapshots?|crawls?|updates?|early|mid|late|the\s+one)\b", " ", question, flags=re.I)
+    question = re.sub(r"\bfrom what to what\b|\b(?:between|snapshots?|crawls?|updates?|early|mid|late|the\s+one|recently|lately|right|whatever)\b", " ", question, flags=re.I)
     return _CHANGE_WORDS.sub(" ", question)
 
 
@@ -121,9 +122,18 @@ def change_answer(views: list[SnapshotView], question: str) -> Optional[tuple[st
         return f"Now: {sentence_for(now_fact)}\nAs of {reference.taken_on}: {sentence_for(then_fact)}", source
     now = select_blocks(latest.index, topic)
     then = select_blocks(reference.index, topic)
+    if RETIRED_ROWS and then and then[0].is_row:
+        gone = _retired(latest, reference, then[0], now[0] if now and now[0].is_row else None)
+        if gone is not None:
+            return gone
     if not now or not then:
         return None
     source = Source(now[0].url, latest.snapshot_id, now[0].text[:200])
+    if CHRONOLOGY and now[0].is_row:
+        between = [v for v in views if reference.taken_on <= v.taken_on <= latest.taken_on]
+        lines = _chronology(between, now[0], topic, bool(_NEWEST_TIER.search(question)))
+        if lines:
+            return "\n".join(lines[:MAX_CHANGED_ROWS]), source
     changed = _changed_rows(latest, reference, now[0], then[0], topic)
     if not changed:
         return f"No change since {reference.taken_on}: " + "\n".join(b.text for b in now), source
@@ -131,6 +141,10 @@ def change_answer(views: list[SnapshotView], question: str) -> Optional[tuple[st
 
 
 MAX_CHANGED_ROWS = 8
+MAX_STEPS = 3
+CHRONOLOGY = True  # a changed tier reads "X (as of May), then Y (from June). Current: Y." across every snapshot compared
+RETIRED_ROWS = True  # a tier the old table listed and the new one does not: "was listed ... is not listed ..."
+_NEWEST_TIER = re.compile(r"\b(?:newest|latest|new)[\s-]+(?:model|car|vehicle|auto)", re.I)
 _FIRST_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
@@ -177,3 +191,76 @@ def _changed_rows(latest: SnapshotView, reference: SnapshotView, now: Block, the
             pairs = [(now_by_tier[k], then_by_tier[k]) for k in now_by_tier if k in then_by_tier and _values(now_by_tier[k]) != _values(then_by_tier[k])]
             return [(n.text, t.text) for n, t in pairs[:MAX_CHANGED_ROWS]]
     return [(now.text, then.text)] if now.text != then.text else []
+
+
+_KIND_NAMES = {"apy": "APY", "apr": "APR", "rate": "rate"}
+
+
+def _figures(row: Block) -> str:
+    """The row's rate figures as "3.81% rate, 3.85% APY" (footnote marks dropped)."""
+    parts = []
+    for kind, cell in row.figures:
+        m = re.search(r"\d+(?:\.\d+)?\s*%?", cell)
+        parts.append(f"{m.group(0).replace(' ', '') if m else cell} {_KIND_NAMES.get(kind, kind)}")
+    return ", ".join(parts)
+
+
+def _name(row: Block) -> str:
+    label = " ".join(row.label.split())
+    return label if row.caption.lower() in label.lower() else f"{row.caption}: {label}"
+
+
+def _chronology(views: list[SnapshotView], now: Block, topic: str, newest_only: bool) -> list[str]:
+    """One line per tier of the topic's table whose figures moved between the first and last of `views`:
+    "<tier>: 3.85% APY (as of June 9, 2026), then 4.10% APY (from September 28, 2026). Current: 4.10% APY."
+    Each view contributes its best-ranked table; tiers are matched by key. "The newest model years" keeps
+    the newest model-year tier only."""
+    latest = views[-1]
+    now_by_tier = _fitting(latest, _table_rows(latest, now.url, caption_words(now)), now, topic)
+    if newest_only:
+        now_by_tier = {k: r for k, r in now_by_tier.items() if k.endswith("#tier0")}
+    series: dict[str, list[tuple[str, Block]]] = {k: [(latest.taken_on, r)] for k, r in now_by_tier.items()}
+    for view in views[:-1]:
+        candidates = [*select_blocks(view.index, topic)[:1], *select_blocks(view.index, f"{topic} {now.caption}")[:1]]
+        for old in candidates:
+            rows = _table_rows(view, old.url, caption_words(old)) if old.is_row else []
+            by_tier = _fitting(view, rows, old, topic) if rows else {}
+            if set(now_by_tier) & set(by_tier):
+                for key in now_by_tier:
+                    if key in by_tier:
+                        series[key].insert(len(series[key]) - 1, (view.taken_on, by_tier[key]))
+                break
+    lines = []
+    for key, versions in series.items():
+        steps = [versions[0]]
+        for day, row in versions[1:]:
+            if _values(row) != _values(steps[-1][1]):
+                steps.append((day, row))
+        if len(steps) < 2:
+            continue
+        steps = steps if len(steps) <= MAX_STEPS else [steps[0], steps[-1]]  # a long history: where it started and where it is
+        parts = [f"{_figures(row)} ({'as of' if i == 0 else 'from'} {long_date(day)})" for i, (day, row) in enumerate(steps)]
+        lines.append(f"{_name(steps[-1][1])}: " + ", then ".join(parts) + f". Current: {_figures(steps[-1][1])}.")
+    return lines
+
+
+def _retired(latest: SnapshotView, reference: SnapshotView, then: Block, now: Optional[Block]) -> Optional[tuple[str, Source]]:
+    """A tier the old table listed that the newest version of that table no longer lists ("whatever happened
+    to the 25-month special"): when it was listed, that it is gone, and the tiers the table lists now.
+    The newest table is the one the question's best match sits in, else the old table's twin by caption."""
+    words = caption_words(then)
+    if now is not None and caption_words(now) != words:
+        return None  # a vague question: the old best match sits in another table than the new one
+    old_rows = _table_rows(reference, then.url, words)
+    new_rows = _table_rows(latest, now.url, caption_words(now)) if now else _table_rows(latest, then.url, words)
+    if not new_rows or not old_rows:
+        return None
+    old_ranks, new_ranks = _tier_ranks(old_rows), _tier_ranks(new_rows)
+    if _tier_key(then, old_ranks) in {_tier_key(r, new_ranks) for r in new_rows}:
+        return None
+    old_keys = {_tier_key(r, old_ranks) for r in old_rows}
+    added = [r for r in new_rows if _tier_key(r, new_ranks) not in old_keys]
+    text = f"{_name(then)} ({_figures(then)}) was listed as of {long_date(reference.taken_on)} and is not listed as of {long_date(latest.taken_on)}."
+    if added:
+        text += " The table now lists: " + "; ".join(dict.fromkeys(" ".join(r.label.split()) for r in added)) + "."
+    return text, Source(new_rows[0].url, latest.snapshot_id, new_rows[0].text[:200])

@@ -23,6 +23,7 @@ from pressfacts import answer_from_facts, sentence_for
 from sentences import asked_shapes, better_than, select_sentences
 from qualifiers import parse_question
 from schedules import asks_schedules
+from terminology import current_names
 from textnorm import clean, content_tokens, normalize_question
 from views import SnapshotView, build_view
 
@@ -34,6 +35,7 @@ NOT_LISTED = "That isn't listed on our website; please contact us."
 OFFER_ENDED = "That offer is no longer available."
 
 MAX_SOURCES = 5
+CURRENT_NAMES = True  # a model-year bracket the site has renamed is read under its current name
 
 
 def cited_sources(view: SnapshotView, blocks: list) -> list[Source]:
@@ -75,6 +77,9 @@ class KnowledgeBase:
         return eligible[-1] if eligible else None
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
+        return self._answer(question, as_of)
+
+    def _answer(self, question: str, as_of: Optional[str]) -> Answer:
         question = normalize_question(question)
         day = iso_date(as_of)
         known = [v for v in self.views if day is None or v.taken_on <= day]  # nothing after as_of may leak in
@@ -89,6 +94,8 @@ class KnowledgeBase:
         else:
             written_date = None
         view = self._view_for(day or written_date)
+        if CURRENT_NAMES and view is not None:
+            question = current_names(question, [v for v in self.views if v.taken_on < view.taken_on], view)
         calendar_years = parse_question(clean(question)).calendar_years
         cutoff = f"{max(calendar_years)}-12-31" if calendar_years else ""
         if (calendar_years and self.views and max(calendar_years) < int(self.views[0].taken_on[:4])

@@ -120,6 +120,9 @@ _MONTH_LOOSE = re.compile(r"\b(" + "|".join(sorted(_MONTH_ABBREVIATIONS, key=len
 _LEADS_MONTH = re.compile(r"(?:\b(?:in|since|from|to|and|between|of|during|until|through|by|after|before|vs|versus|than|with|on)\s+(?:the\s+)?(?:(?:early|mid|late|end of|start of|beginning of)\s+)?)$", re.I)
 
 
+_DAY_AFTER = re.compile(r"\s*(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b(?!\s*-?\s*(?:months?|mos?|years?|yrs?|%))")  # "apr 27", not "apr 60 months"
+
+
 def _month_names(text: str) -> str:
     """"aug 27", "in june", "since may": the capitalised month names the date readers know. A bare
     "may" is a month only after a date preposition or before a day."""
@@ -127,9 +130,9 @@ def _month_names(text: str) -> str:
         word = match.group(1).lower()
         name = _MONTH_ABBREVIATIONS[word]
         after = text[match.end():match.end() + 6]
-        if word == "may" and not (_LEADS_MONTH.search(text[:match.start()]) or re.match(r"\s*\d", after)):
+        if word == "may" and not (_LEADS_MONTH.search(text[:match.start()]) or _DAY_AFTER.match(after)):
             return match.group(0)
-        if word != "may" and len(match.group(0).rstrip(".")) < 4 and not (_LEADS_MONTH.search(text[:match.start()]) or re.match(r"\s*\d", after)):
+        if word != "may" and len(match.group(0).rstrip(".")) < 4 and not (_LEADS_MONTH.search(text[:match.start()]) or _DAY_AFTER.match(after)):
             return match.group(0)  # "mar", "jan", "dec" in running text
         return name
     return _MONTH_LOOSE.sub(fold, text)
