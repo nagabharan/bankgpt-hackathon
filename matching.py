@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 from typing import NamedTuple
 
 from bm25 import Index
@@ -56,9 +57,14 @@ _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{
 VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "hour": _CLOCK_TIME}
 
 
-def block_words(block: Block) -> set[str]:
+@lru_cache(maxsize=1 << 15)  # the same candidate blocks and page contexts recur across questions
+def _word_set(text: str) -> frozenset[str]:
+    return frozenset(content_tokens(text))
+
+
+def block_words(block: Block) -> frozenset[str]:
     """What the block is about: its own words plus its page's title, URL and headings."""
-    return set(content_tokens(block.text)) | set(content_tokens(block.context))
+    return _word_set(block.text) | _word_set(block.context)
 
 
 def coverage(index: Index, required: list[str], block: Block) -> float:
@@ -290,8 +296,9 @@ def asks_where_online(query: list[str]) -> bool:
 
 def best_link(index: Index, query: list[str]) -> str:
     """The site link whose address best matches the question's words (host words count triple)."""
-    uses: Counter = Counter(link for block in index.blocks for link in block.links
-                            if link.startswith("http") and page_type(link) not in ("blog", "news", "calculator", "document"))
+    uses: Counter = index.cached("site_links", lambda: Counter(
+        link for block in index.blocks for link in block.links
+        if link.startswith("http") and page_type(link) not in ("blog", "news", "calculator", "document")))
     words = set(query) - {"online"}
     def score(link: str) -> tuple[int, int, str]:
         host, _, path = link.split("//", 1)[-1].partition("/")

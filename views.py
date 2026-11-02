@@ -40,9 +40,10 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
         if url in seen:
             continue
         seen.add(url)
-        facts += dated_facts(url, clean(page.markdown))
+        cleaned = clean(page.markdown)  # the costliest step of ingest: once per page
+        facts += dated_facts(url, cleaned)
         page_expired = page_looks_expired(url, page.title)
-        for block in parse_page(url, page.markdown, page.title):
+        for block in parse_page(url, page.markdown, page.title, cleaned):
             if page_expired or is_expired(block.text, snapshot.taken_on):
                 block = replace(block, expired=True)  # an ended offer, judged at this snapshot's date
             pages_per_text[block.text].add(url)

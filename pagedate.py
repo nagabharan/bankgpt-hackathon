@@ -10,7 +10,8 @@ _DATE = (rf"(?:(?P<mon>{'|'.join(MONTHS)})\s+(?P<d1>\d{{1,2}}),\s+(?P<y1>\d{{4}}
          r"|(?:(?P<m2>\d{1,2})/(?P<d2>\d{1,2})/(?P<y2>\d{4}|\d{2}))"
          r"|(?:(?P<y3>\d{4})-(?P<m3>\d{2})-(?P<d3>\d{2}))")
 # "Rates are effective as of 03/15/2031", "Last updated: March 3, 2026": a date right after a word like "effective" or "updated".
-_STATED = re.compile(rf"(?:effective|updated|revised|last modified|published|posted)\b[^.\n]{{0,25}}?(?:{_DATE})", re.I)
+# (?=[eurlp]) restates the keywords' first letters: same matches, much faster scan of whole pages.
+_STATED = re.compile(rf"(?=[eurlp])(?:effective|updated|revised|last modified|published|posted)\b[^.\n]{{0,25}}?(?:{_DATE})", re.I)
 _ANY = re.compile(_DATE)
 DATELINE_WINDOW = 800  # a press release prints its date near the top
 

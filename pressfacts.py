@@ -15,10 +15,12 @@ from textnorm import MONTHS
 # "June 18, 2024": the publication date printed near the top of a release.
 _DATELINE = re.compile(rf"\b({'|'.join(MONTHS)})\s+(\d{{1,2}}),\s+(\d{{4}})\b")
 # "12 branch office locations" / "12 branches" (not "1,000 branches": the lookbehind skips digits and commas).
-_BRANCH_COUNT = re.compile(r"(?<![\d,])(\d{1,3})\s+branch(?:es| office locations?)\b", re.I)
+# The leading (?=...) lookaheads restate a match's first character: same matches, faster page scans.
+_BRANCH_COUNT = re.compile(r"(?=\d)(?<![\d,])(\d{1,3})\s+branch(?:es| office locations?)\b", re.I)
 _ORDINALS = "first second third fourth fifth sixth seventh eighth ninth tenth".split()
+_ORDINAL_INITIALS = "".join(sorted({o[0] for o in _ORDINALS}))
 # "third time Example Magazine recognized": the verb anchor keeps out "first-time homebuyer" and the like.
-_ORDINAL_RECOGNITION = re.compile(rf"\b({'|'.join(_ORDINALS)}) time\s+(\w+)\s+(?:recognized|named|ranked)\b", re.I)
+_ORDINAL_RECOGNITION = re.compile(rf"\b(?=[{_ORDINAL_INITIALS}])({'|'.join(_ORDINALS)}) time\s+(\w+)\s+(?:recognized|named|ranked)\b", re.I)
 
 
 class DatedFact(NamedTuple):

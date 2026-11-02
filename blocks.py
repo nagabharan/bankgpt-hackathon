@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import textwrap
 from dataclasses import dataclass, field
-from typing import Iterator, NamedTuple
+from typing import Iterator, NamedTuple, Optional
 
 from pagedate import page_date
 from textnorm import MONEY_MARK, clean, strip_links
@@ -246,8 +246,9 @@ class _PageParser:
                                      caption, self.context, self.published))
 
 
-def parse_page(url: str, markdown: str, title: str = "") -> list[Block]:
-    lines = clean(markdown).splitlines()
+def parse_page(url: str, markdown: str, title: str = "", cleaned: Optional[str] = None) -> list[Block]:
+    """`cleaned` is clean(markdown), when the caller already has it."""
+    lines = (clean(markdown) if cleaned is None else cleaned).splitlines()
     parser = _PageParser(url, title, page_date(markdown))
     i = 0
     while i < len(lines):
