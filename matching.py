@@ -49,7 +49,7 @@ LOWEST = frozenset("lowest lower smallest least cheapest".split())
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
 # Plural nouns that do not mean "several items" ("savings" is a product name).
-PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply"})
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply", "reward"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
 _HOW_MUCH = re.compile(r"\bhow much\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
@@ -401,13 +401,15 @@ def _label(text: str) -> str:
     return text.split(":")[0] if ":" in text else ""
 
 
-def _body_after(blocks: list[Block], i: int) -> list[Block]:
+def _body_after(blocks: list[Block], i: int, continues: bool = True) -> list[Block]:
     """The paragraph right after block `i` on its page, and a short line after that (a date, a label).
     A heading that already holds a figure (an address line) only takes continuation lines under the
     same label."""
     body = []
     heading = blocks[i]
     has_figure = any(c.isdigit() for c in heading.text)
+    if has_figure and not continues:
+        return body
     for follower in blocks[i + 1:i + 1 + BODY_MAX_BLOCKS]:
         if follower.url != heading.url or follower.is_row or ((body or has_figure) and len(follower.text) > BODY_SHORT_LINE):
             break
@@ -426,11 +428,17 @@ def _short_blocks(index: Index) -> dict[str, list[int]]:
     return found
 
 
-def with_body(index: Index, blocks: list[Block]) -> list[Block]:
+_ADDRESS_WORDS = frozenset({"address", "mailing", "location", "located", "where"})
+_PHONE_WORDS = frozenset({"phone", "call", "number", "contact", "text", "fax"})
+
+
+def with_body(index: Index, blocks: list[Block], question: str = "") -> list[Block]:
     """A block that is only a heading ("Application period: ..." / a headline with no sentence) is
     followed by the paragraphs under it. A headline repeated on other pages (as a teaser) is read
     where its body is longest, which is the article itself."""
     copies = index.cached("heading_copies", lambda: _short_blocks(index))
+    asked = _question(question).query if question else []
+    continues = not question or bool(_ADDRESS_WORDS.intersection(asked))  # only an address spans several labelled lines
     result = []
     for block in blocks:
         if (block.is_row or len(block.text) > 100 or block.text.rstrip().endswith((".", "!", "?"))
@@ -439,5 +447,80 @@ def with_body(index: Index, blocks: list[Block]) -> list[Block]:
             continue
         best = max(copies[block.text], key=lambda i: (sum(len(b.text) for b in _body_after(index.blocks, i)), -i))
         result.append(index.blocks[best])
-        result.extend(b for b in _body_after(index.blocks, best) if b not in blocks)
+        asks_phone = not question or bool(_PHONE_WORDS.intersection(asked))
+        result.extend(b for b in _body_after(index.blocks, best, continues) if b not in blocks and (asks_phone or not phone_in(b.text)))
     return result
+
+
+FOCUS_KEEP = 0.8  # a sentence, row or one-line fact stays if it covers this much of what the best one covers
+
+
+def _is_heading(block: Block) -> bool:
+    """A headline or label with no sentence of its own (with_body adds what is under it)."""
+    return not block.is_row and len(block.text) <= 100 and not block.text.rstrip().endswith((".", "!", "?"))
+
+
+def trim_blocks(index: Index, blocks: list[Block], question: str) -> list[Block]:
+    """Of several rows found together, keep those that cover the question's words nearly as well as
+    the best one: a neighbouring row about something else adds numbers, not answers."""
+    q = _question(question)
+    if len(blocks) < 2 or q.several or kind_for(question) or "hour" in q.query or asks_schedules(question):
+        return blocks
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = sorted({t for t in q.query if t not in skipped and not any(c.isdigit() for c in t)})
+    if not required:
+        return blocks
+    covers = [coverage(index, required, b) for b in blocks]
+    best = max(covers)
+    # a row or a one-line fact is compared closely; a longer passage only goes when it barely touches the question
+    return [b for b, c in zip(blocks, covers) if _is_heading(b) or c >= best * (FOCUS_KEEP if b.is_row or len(b.text) <= FACT_LINE_CHARS else FOCUS_FAR)]
+
+
+FACT_LINE_CHARS = 160
+FOCUS_FAR = 0.5
+FOCUS_MIN_CHARS = 200  # a shorter passage is shown whole
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z“\"'(])|\n+")
+_HEADING = re.compile(r"^([^:\n]{1,80}):\s")
+
+
+def focused_lines(index: Index, blocks: list[Block], question: str) -> list[str]:
+    """The answer text of each block. A long passage keeps the sentences that talk about the question
+    and drops the ones that only add other numbers (a referral bonus beside a deposit amount);
+    sentences without a number, and the sentence holding the asked value, always stay."""
+    q = _question(question)
+    if q.several or kind_for(question) or "hour" in q.query or asks_schedules(question):
+        return [block.text for block in blocks]
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = sorted({t for t in q.query if t not in skipped and not any(c.isdigit() for c in t)})
+    asked_numbers = set(re.findall(r"\d[\d,]*(?:\.\d+)?", question))
+    return [_focus(index, block, required, asked_numbers) if required else block.text for block in blocks]
+
+
+def _focus(index: Index, block: Block, required: list[str], asked_numbers: set[str]) -> str:
+    text = block.text
+    if block.is_row or len(text) <= FOCUS_MIN_CHARS:
+        return text
+    sentences = [s for s in _SENTENCE_BREAK.split(text) if s.strip()]
+    if len(sentences) < 2:
+        return text
+    scores = [_sentence_coverage(index, required, s) for s in sentences]
+    numbers = [set(re.findall(r"\d[\d,]*(?:\.\d+)?", s)) for s in sentences]
+    best = max((score for score, n in zip(scores, numbers) if n), default=0.0)  # the answer is a sentence with a number
+    if best == 0:
+        return text
+    kept = [s for s, score, n in zip(sentences, scores, numbers) if not n or n & asked_numbers or score >= best * FOCUS_KEEP]
+    if len(kept) == len(sentences):
+        return text
+    heading = _HEADING.match(text)
+    if heading and not kept[0].startswith(heading.group(1)):
+        kept.insert(0, heading.group(1) + ":")
+    return "\n".join(kept) if "\n" in text else " ".join(kept)
+
+
+def _sentence_coverage(index: Index, required: list[str], sentence: str) -> float:
+    words = _word_set(sentence)
+    wanted = {t: index.idf(t) for t in required}
+    total = sum(wanted.values())
+    if not total:
+        return 0.0
+    return sum(w for t, w in wanted.items() if t in words or words.intersection(aliases_of(index, t))) / total

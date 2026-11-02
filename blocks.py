@@ -83,6 +83,10 @@ def _value_kind(cell: str) -> str:
     return "%" if "%" in cell else "$" if MONEY_MARK.search(cell) else ""
 
 
+# PDF tables without real headers get generated ones ("Col2"); they say nothing and add a stray number.
+_PLACEHOLDER_HEADER = re.compile(r"Col\d+", re.I)
+
+
 def _first_row_is_data(rows: list[str]) -> bool:
     """Some PDF fee tables have no header: the first row holds a value like the rows below it."""
     first, below = _cells(rows[0])[1:], _cells(rows[2])[1:] if len(rows) > 2 else []
@@ -124,7 +128,7 @@ def _table_rows(caption: str, rows: list[str]) -> list[_Row]:
         if len(filled) == 1 and len(cells) > 1:
             section = filled[0]
             continue
-        pairs = [f"{h} {c}".strip() for h, c in zip(header, cells) if c] if header else filled
+        pairs = [f"{'' if _PLACEHOLDER_HEADER.fullmatch(h) else h} {c}".strip() for h, c in zip(header, cells) if c] if header else filled
         text, links = strip_links(" | ".join(p for p in (caption, section, *pairs) if p))
         kinds = [column_kind(h) for h in header] if header else ["other"] * len(cells)
         figures = tuple((k, strip_links(c)[0]) for k, c in zip(kinds, cells) if k in FIGURE_KINDS and _value_kind(c))
