@@ -292,6 +292,40 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     return _extreme_rows(unique, q.query)
 
 
+_HOW_LONG = re.compile(r"\bhow long\b|\bhow many (?:days|months|years)\b", re.I)
+_DURATION = re.compile(r"\b\d+ (?:day|month|year)s?\b")
+_ENDS_AFTER = re.compile(r"\b(?:expires?|lasts?|ends?)\b", re.I)
+_PLURAL_UNIT = re.compile(r"\b(?:[2-9]|\d{2,}) (?:day|month|year)\b(?!s)")  # clean() folds "six months" to "6 month"
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def duration_notes(index: Index, blocks: list[Block], question: str) -> list[str]:
+    """"How long does the 2.90% intro rate last?": a rate row cannot say; the sentence of its page that
+    repeats the rate together with a length of time does."""
+    if not _HOW_LONG.search(question) or not blocks or not blocks[0].is_row or not blocks[0].figures:
+        return []
+    rate = _FIGURE_VALUE.search(blocks[0].figures[0][1])
+    if rate is None:
+        return []
+    shown = rate.group(0) + "%"
+    prose = index.cached("prose_by_url", lambda: _group_by_url(b for b in index.blocks if not b.is_row))
+    found = [sentence for block in prose.get(blocks[0].url, ()) for sentence in _SENTENCE_END.split(clean(block.text))
+             if shown in sentence and _DURATION.search(sentence)]
+    if not found:
+        return []
+    sentence = next((s for s in found if _ENDS_AFTER.search(s)), found[0])  # "expires six months from..."
+    end = _DURATION.search(sentence).end()
+    sentence = sentence[:end + sentence[end:].find(",")] if "," in sentence[end:] else sentence  # the clause after is another fact
+    return [_PLURAL_UNIT.sub(lambda m: m.group(0) + "s", sentence)]
+
+
+def _group_by_url(blocks) -> dict[str, list[Block]]:
+    grouped: dict[str, list[Block]] = {}
+    for block in blocks:
+        grouped.setdefault(block.url, []).append(block)
+    return grouped
+
+
 _FIGURE_VALUE = re.compile(r"\d+(?:\.\d+)?")
 
 

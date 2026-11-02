@@ -16,7 +16,7 @@ from askdate import split_date
 from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
-from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, links_of, select_blocks
+from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, duration_notes, links_of, select_blocks
 from pressfacts import answer_from_facts, sentence_for
 from qualifiers import parse_question
 from textnorm import clean, content_tokens
@@ -98,7 +98,7 @@ class KnowledgeBase:
             return Answer(text=NOT_LISTED, confident=False)
         if blocks[0].expired:  # the only match is an ended offer: do not present its terms as a live deal
             return Answer(text=OFFER_ENDED, confident=False)
-        lines = [block.text for block in blocks]
+        lines = [block.text for block in blocks] + duration_notes(view.index, blocks, question)
         if asks_for_link(question):
             lines += links_of(blocks)
         return Answer(text="\n".join(lines), sources=cited_sources(view, blocks))

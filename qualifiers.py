@@ -20,6 +20,7 @@ _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief", "refinance"})
 _TIER_SYNONYMS = {"refi": "refinance", "refinancing": "refinance", "refinanced": "refinance"}
 EXCEPTIONAL_TIERS = frozenset({"relief"})  # one-off programs: never part of "the rates"
+REPLACING_TIERS = frozenset({"refinance"})  # a loan that replaces another: a rate row of it is not part of "the rates" unasked
 EXCEPTIONAL_TIER_FACTOR = 0.2
 
 WRONG_TIER_FACTOR = 0.5  # block names a tier the question did not ask for
@@ -71,7 +72,7 @@ _MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
 _AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$?(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")  # "$10000-24999" too
 CALENDAR_MATCH_FACTOR = 1.3  # block's page is dated in the calendar year the question names
 CALENDAR_OTHER_FACTOR = 0.85
-NO_AMOUNT_BAND_FACTOR = 0.2  # every amount in the question lies outside the block's amount tiers
+NO_AMOUNT_BAND_FACTOR = 0.0  # an amount in the question lies outside the block's amount tiers: another tier's rate is not an answer
 BALANCE_TIER_FACTOR = 1.3
 TIGHTNESS_EXPONENT = 0.1
 TIGHTNESS_FLOOR = 0.5
@@ -132,7 +133,8 @@ class QuestionInfo:
                     factor *= BALANCE_TIER_FACTOR
         block_tiers = tier_words_in(block.text)
         if ignore_tiers:  # a list wants every ordinary tier, but not a one-off program's rate
-            return factor * EXCEPTIONAL_TIER_FACTOR ** len((block_tiers & EXCEPTIONAL_TIERS) - self.tiers)
+            unasked = block_tiers & (EXCEPTIONAL_TIERS | (REPLACING_TIERS if block.is_row else frozenset()))
+            return factor * EXCEPTIONAL_TIER_FACTOR ** len(unasked - self.tiers)
         factor *= WRONG_TIER_FACTOR ** len(block_tiers - self.tiers)
         factor *= MISSING_TIER_FACTOR ** len(self.tiers - block_tiers)
         return factor
