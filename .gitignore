@@ -2,7 +2,9 @@
 PLAN.md
 DECISIONS.md
 SCORES.md
-tools/baseline.json
+
+# development tooling (score gate, report generator, baseline): local only
+tools/
 
 # scorer output and scratch
 results/
@@ -21,4 +23,3 @@ __pycache__/
 .claude/
 .env
 reports/
-tools/report_content.py

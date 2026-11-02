@@ -16,7 +16,7 @@ from views import SnapshotView
 
 _CHANGE_WORDS = re.compile(
     r"\b(?:chang(?:e|ed|es|ing)|since|versus|vs\.?|compared? (?:to|with)|increase[ds]?|decrease[ds]?|"
-    r"went (?:up|down)|rise[sn]?|rose|dropp?(?:ed)?|fell|used to|previously|differen(?:t|ce))\b", re.I)
+    r"(?:went|go|goes|gone|going) (?:up|down)|rise[sn]?|rose|dropp?(?:ed)?|fell|used to|previously|differen(?:t|ce))\b", re.I)
 _MONTHS = list(calendar.month_name)[1:]
 # "since May", "from March 2026", "in May", "vs May": the month the question compares with.
 _REFERENCE = re.compile(rf"\b(?:since|from|in|as of|during|versus|vs\.?|compared? (?:to|with))\s+"

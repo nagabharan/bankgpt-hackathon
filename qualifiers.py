@@ -51,8 +51,11 @@ def terms_in(text: str) -> frozenset[int]:
     return frozenset(found)
 
 
+_OLDER = re.compile(r"\b(20\d{2})\s+model\s+year\s*\(and older\)", re.I)
+
+
 def year_spans_in(text: str) -> list[tuple[int, int]]:
-    spans = []
+    spans = [(0, int(year)) for year in _OLDER.findall(text)]  # "2016 Model Year (and older)" = up to 2016
     for lo, hi in YEAR_SPAN.findall(text):
         hi_year = int(hi) if len(hi) == 4 else int(lo[:2] + hi)
         spans.append((int(lo), hi_year))

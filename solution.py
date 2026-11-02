@@ -65,8 +65,10 @@ class KnowledgeBase:
         return eligible[-1] if eligible else None
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
-        if self.views and is_change_question(question):
-            changed = change_answer(self.views, question)
+        day = iso_date(as_of)
+        known = [v for v in self.views if day is None or v.taken_on <= day]  # nothing after as_of may leak in
+        if len(known) >= 2 and is_change_question(question):
+            changed = change_answer(known, question)
             if changed is not None:
                 return Answer(text=changed[0], sources=[changed[1]])
         newest = self.views[-1].taken_on if self.views else datetime.now().date().isoformat()

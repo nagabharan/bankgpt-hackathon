@@ -17,6 +17,8 @@ CURRENCY_SYMBOLS = "$€£¥₹₩₽₺₫₪₱฿"
 CURRENCY_CODES = ("USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "INR", "MXN", "CNY")
 # A currency symbol or ISO code: the mark of a money amount (the % sign marks a rate).
 MONEY_MARK = re.compile(f"[{re.escape(CURRENCY_SYMBOLS)}]|\\b(?:{'|'.join(CURRENCY_CODES)})\\b")
+_K_AMOUNT = re.compile(r"\$?\b(\d+(?:\.\d+)?)\s?[kK]\b")
+_DOLLARS_WORD = re.compile(r"\b(\d+(?:\.\d+)?)\s+dollars?\b", re.I)
 _SYMBOL_SPACE = re.compile(f"([{re.escape(CURRENCY_SYMBOLS)}])\\s+(?=\\d)")  # "€ 591.61" -> "€591.61"
 # A footnote digit after a grouped amount: "$25,0002" is "$25,000" plus footnote 2.
 _AMOUNT_FOOTNOTE = re.compile(f"([{re.escape(CURRENCY_SYMBOLS)}]\\d{{1,3}}(?:,\\d{{3}})+)\\d\\b")
@@ -29,7 +31,7 @@ STOPWORDS = frozenset(
     "a an and are as at be by can do does for how i in is it me my of on or s tell "
     "that the there this to what when where which who with you your "
     # question filler that carries no topic
-    "about any between current currently could did from general get give have has its keep know last like m re ve ll d t going "
+    "about any between correct current currently could did from general get give have has its keep know last like located m re ve ll d t going still new financed finance buy if into "
     "many may much need now please provide right same their them they today want was were would".split()
 )
 
@@ -59,6 +61,8 @@ def clean(text: str) -> str:
     text = _FOOTNOTE.sub("", text)
     text = _SPACED_FOOTNOTE.sub("", text)
     text = _GROUPED_NUMBER.sub(lambda m: m.group().replace(",", ""), text)
+    text = _K_AMOUNT.sub(lambda m: f"${round(float(m.group(1)) * 1000)}", text)  # "$30k" / "30K"
+    text = _DOLLARS_WORD.sub(lambda m: f"${m.group(1)}", text)  # "50000 dollars"
     return _SYMBOL_SPACE.sub(r"\1", text)
 
 

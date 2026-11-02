@@ -8,7 +8,7 @@ from collections import Counter
 from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
-from qualifiers import QuestionInfo, fact_key, parse_question
+from qualifiers import QuestionInfo, fact_key, parse_question, year_spans_in
 from schedules import compares_hours, distinct_schedules
 from segments import intent_of, page_type, segment_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
@@ -30,13 +30,15 @@ ALIASES = {
     "eligible": ("member", "membership"), "eligibility": ("member", "membership"), "join": ("member", "membership"),
     "student": ("college", "university"), "college": ("student", "university"), "university": ("student", "college"),
     "cost": ("fee", "price"), "wallet": ("payment", "pay"),
+    "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
+    "transit": ("routing",), "share": ("certificate",),
 }
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 # Words that ask for a link or for every item, not topics.
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
-PLURAL_EXEMPT = frozenset({"hour"})  # plural nouns that do not mean "several items"
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week"})  # plural nouns that do not mean "several items"
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
@@ -46,7 +48,7 @@ _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 ARTICLE_PATHS = ("/learn/", "/newsroom/", "/blog/")
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
-# A percent within a few words of a rate word, either order: "APY: 3.50%", "2.90% introductory annual percentage rate".
+# A percent within a few words of a rate word, either order: "APY: 3.50%", "4.25% introductory annual percentage rate".
 _PERCENT = r"\d+(?:\.\d+)?%"
 _RATE_TERM = r"(?:rate|apr|apy|interest|yield|dividend)"
 _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{_PERCENT}\W+(?:\w+\W+){{0,6}}?{_RATE_TERM}", re.I)
@@ -88,6 +90,8 @@ def has_asked_value(query: list[str], block: Block) -> bool:
             continue
         if not shape.search(block.text):
             return False
+        if word in RATE_WORDS and "%" not in block.text:
+            return False  # a price is not a rate
         if word in RATE_WORDS and not block.is_row and not _RATE_NEAR_PERCENT.search(block.text):
             return False  # a sentence must tie the percent to a rate ("80% of costs" is not a rate)
     return True
@@ -125,6 +129,8 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
     for score, doc_id in index.search(with_aliases(query), CANDIDATES, rows_only):
         block = index.blocks[doc_id]
         factor = info.fit(block, ignore_tiers=several)
+        if MONEY_WORDS.intersection(query) and page_type(block.url) == "calculator":
+            continue  # a calculator's example rows are not the credit union's rates
         if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
@@ -145,7 +151,11 @@ def _score_candidates(index: Index, info: QuestionInfo, query: list[str], severa
     if rows:
         return _drop_superseded(index, rows)
     prose = _qualifying(index, info, query, several, False, intent, question)  # a rate stated in a sentence
-    return [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
+    prose = [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
+    if info.years:  # a rate for a model year must come from text that names a range covering it
+        prose = [(s, d) for s, d in prose if any(lo <= y <= hi for y in info.years
+                                                 for lo, hi in year_spans_in(index.blocks[d].text))]
+    return prose
 
 
 def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tuple[float, int]]:
@@ -187,10 +197,22 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
     return [max(found, key=lambda sb: sb[0])[1]]
 
 
+# Wordings that ask for a rate or for opening hours without saying so.
+_PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_OPENING = re.compile(r"\bwhat time\b|\bwhen (?:is|are)\b[^?]*\bopen\b|\bopen and close\b|\bopening\b|\bclosing time\b", re.I)
+
+
+def with_implied_words(text: str, query: list[str]) -> list[str]:
+    """Add the word a wording implies: "what does it pay?" asks for a rate, "when is it open?" for hours."""
+    extra = (["rate"] if _PAYS.search(text) and not MONEY_WORDS.intersection(query) else [])
+    extra += (["hour"] if _OPENING.search(text) and "hour" not in query else [])
+    return query + extra
+
+
 def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
     text = clean(question)
-    query = content_tokens(text)
+    query = with_implied_words(text, content_tokens(text))
     if compares_hours(question):
         schedules = distinct_schedules(index, question)
         if schedules:
@@ -209,7 +231,9 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     blocks = index.blocks
     contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
     in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(query))  # the page named for the topic
-    best = blocks[max(contenders, key=lambda d: (blocks[d].freshness, in_url(d)))]  # equals: best scored first
+    info = parse_question(text)
+    fit = lambda d: round(info.fit(blocks[d], several), 1)  # the tier that was asked for before the newest one
+    best = blocks[max(contenders, key=lambda d: (fit(d), blocks[d].freshness, in_url(d)))]  # equals: best scored first
 
     tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
     same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]

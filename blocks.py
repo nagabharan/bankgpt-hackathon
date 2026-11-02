@@ -168,6 +168,11 @@ def _all_path_words(url: str) -> str:
     return " ".join(re.sub(r"[-_]+", " ", s) for s in path.split("/") if s)
 
 
+def _looks_like_code(text: str) -> bool:
+    """A fragment of embedded JSON/script: braces or '":' pairs with several quoted keys."""
+    return text.count('"') >= 4 and (("{" in text or "}" in text) or text.count('":') >= 2 or '" :' in text)
+
+
 def _path_words(url: str) -> str:
     """The last two path segments of a link as words: '.../personal/savings/certificates/?x' -> 'savings certificates'."""
     path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
@@ -199,6 +204,8 @@ class _PageParser:
             self._add_prose(line)
 
     def _add_prose(self, raw: str) -> None:
+        if _looks_like_code(raw):
+            return  # JSON-LD / script text embedded in the crawl is not content
         text, links = strip_links(_EMPHASIS.sub("", raw).lstrip("#* ").strip())
         if _is_caption(text):
             self.caption = text

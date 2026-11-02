@@ -5,83 +5,111 @@
 - Nothing is written to disk; everything is built in memory inside `ingest()`.
 
 ## How it works
-- **Ingest:** each snapshot is split into blocks: one per table row (with its caption, column
-  headers and the "effective as of" date printed after the table) and short passages of prose.
-  Footnote digits, dashes, number formats (including other currencies) are normalised, and
-  text repeated across many pages (forms, country lists) is dropped. Each snapshot gets its
-  own BM25 index.
-- **Answering:** the snapshot is chosen from `as_of` (newest on or before that date, or the
-  newest overall). BM25 returns candidate blocks, which are kept only if they cover the
-  question's key words and hold the kind of value asked for (a rate or money amount, a clock
-  time for hours). Qualifiers then decide between look-alike facts: a term in the question
-  ("60-month", "30-year") must match the block, a model year must fall inside the block's
-  range ("2025" is inside "2024-27"), and a tier the question does not name (jumbo, business,
-  Roth, Traditional) is down-weighted so the plain tier is the default; an amount ("balance
-  between $10,000 and $24,999") must fall inside the row's amount tier. Rate and fee
-  questions search the table rows first, and only fall back to all blocks when no row
-  qualifies. A plural topic noun ("cards", "rates") or a word like "all"/"offer" asks for
-  several rows.
-- **Press-release facts:** "how many branches" and "what recognition from <org>" are answered
-  from the value on the latest-dated release, as one short sentence, and only when the
-  question is about Dupaco.
-- **Stale copies and articles:** where several pages carry the same table row, only the
-  newest-dated version is kept, however well an older copy matches. Rate and fee questions
-  are never answered from blog or press-release pages.
-- **Changes over time:** a rate, fee or count question that also says changed/since/versus/
-  increased is answered from the newest snapshot and an earlier one (the first snapshot taken
-  in the month named, else the oldest) as "Now: ..." and "As of <date>: ...", or "No change
-  since <date>". Both values are printed on purpose.
-- **Sources:** an answer cites its page and every other page that carries exactly the same
-  text, never a page with a different value.
-- **Dates in the question:** "in May 2026" or "as of March" selects the snapshot (when no
-  `as_of` is given) and is removed from the question text.
-- **Multi-fact answers:** the answer is the best block plus sibling blocks from the same page,
-  date and kind that score nearly as well (all the matching 30-year mortgage rows, every
-  line of a lobby-hours schedule, every card for "what cards do you offer"), at most six, in
-  page order. For "link/URL" questions the page's own links are appended.
-- **Not on the site:** if no block qualifies, the answer is a short "isn't listed, please
-  contact us" with no numbers, and `confident` is false.
+**Ingest.** Each snapshot is split into blocks: one per table row (with its caption, column
+headers and the "effective as of" date printed after the table) and short passages of prose.
+Every block also carries, never shown to the member: its page's title, URL words and nearest
+H1/H2 headings (searchable, at a reduced weight), the date the page states for itself
+(`pagedate.py`), and the page type. Footnote digits, dashes, number formats (including other
+currencies) are normalised, and text repeated across many pages (forms, country lists) is
+dropped. Each snapshot gets its own BM25 index; a word's rarity (idf) is computed from the
+blocks' own text only.
+
+**Page types and priors.** A page is classed from its URL as rate sheet, product, service,
+document, news, blog or calculator (`segments.py`). About 80% of the site is articles, so every
+page gets a prior: a fixed one by type (rate sheet and product above news, blog and calculators)
+times a hub boost from how many other pages link to it. A question is also given an intent
+(rate, news, contact, membership, policy, general), which prefers some page types and disfavours
+others. All of these are soft factors on a block's score, except that a rate or fee question is
+never answered from a blog or press-release prose page.
+
+**Answering.** The snapshot is chosen from `as_of` (newest on or before that date, or the newest
+overall). BM25 returns candidate blocks, which are kept only if they cover the question's key
+words (page context counts) and hold the kind of value asked for: a rate or money amount, a
+clock time for hours; in prose, a percent must sit next to a rate word. Qualifiers decide between
+look-alike facts: a term ("60-month", "30-year") must match, a model year must fall inside the
+row's range ("2025" is inside "2024-27"), an amount must fall inside the row's amount tier, and
+a tier the question does not name (jumbo, business, Roth, Traditional, one-off "relief"
+programs) is down-weighted so the plain tier is the default. Rate and fee questions search the
+table rows first and fall back to all blocks only when no row qualifies. A plural topic noun
+("cards", "rates") or a word like "all"/"offer" asks for several rows. A yes/no capability
+question ("Can I ...?") prefers a block with an affirmative cue.
+
+**Question kinds with their own evidence.** Some questions say what kind of fact they want:
+a contact question needs a phone number (the number repeated on the most blocks wins), "who is
+eligible" needs a service-area description naming two or more states, "what is the X program"
+needs a dollar amount, "how many <nouns> <did something>" needs a number before that noun and
+the action after it (`evidence.py`). The candidates are the blocks that show that evidence.
+"How many branches" and "what recognition from <org>" are answered from dated press-release
+facts (`pressfacts.py`) as one short sentence, only when the question is about Dupaco.
+"How do I join/apply/open ... online" answers with the site link whose address best matches the
+question (host words count triple; article pages are not link sources). A question that compares
+hours between branches ("do all branches keep the same lobby hours?") shows up to three distinct
+schedules found across pages (`schedules.py`).
+
+**Several rows.** A list question returns the best block plus similar blocks, at most eight
+(rows may come from several pages), in page order; other answers take siblings from the same
+page and date, at most six; the hours comparison shows up to three schedules of eight lines.
+
+**What changed.** A question with a change word (changed, since, versus, increased...) and a
+rate or fee word is answered from the newest snapshot and an earlier one (the first snapshot
+taken in or after the month named, else the second newest, or the oldest if no month is named) as
+"Now: ... / As of <date>: ...", or "No change since <date>". Both values are printed on purpose.
+
+**Sources.** A normal answer cites its page and every other page carrying exactly the same text,
+never a page with a different value (change and online-link answers cite a single page).
+
+**Not on the site.** If no block qualifies, the answer is a short "isn't listed, please contact
+us" with no numbers, and `confident` is false. The question's rarest topic word must appear in
+the block, which also refuses questions about other banks or products the credit union lacks.
 
 ## Deciding what is current
-The newest snapshot wins. Within it, candidates that score about the same compete on the
-"effective as of" date printed under each rate table, so a rate sheet dated 08/31/2026 beats
-a promo page still showing last winter's rate. For counts and ordinals in press releases
-("12 branch office locations", "the third time"), the value on the release with the latest
-printed date wins. When answering, expired promotions are not specially handled; the
-"ended/expired" signal is used only to pick the winner in `conflicts()`.
+The newest snapshot wins. A block's freshness is its table's "effective as of" date, else the
+date its page states for itself. Among candidates that score about the same, the freshest wins,
+and where several pages carry the same table row only the newest-dated copy is kept, however
+well an older copy matches, so a promo or calculator page still showing last winter's rate loses
+to the current rate sheet. For counts and ordinals in press releases ("12 branch office
+locations", "the third time"), the value on the release with the latest printed date wins.
+Expired promotions are not specially handled when answering; the "ended/expired" signal is used
+only to pick a winner in `conflicts()`.
 
-`as_of` selects the newest snapshot taken on or before that date (ISO or M/D/YYYY); an
-unreadable date is treated as "now", and a date before the first snapshot gets "isn't listed".
+Dates written in the question work too: "in May 2026" or "as of March" selects the snapshot
+(when no `as_of` is given) and is removed from the question; a date after the newest snapshot
+("today (October 2026)") is left alone. `as_of` selects the newest snapshot taken on or before it
+(ISO or M/D/YYYY); an unreadable date is treated as "now", and a date before the first snapshot
+gets "isn't listed".
 
 ## Conflicts
 `conflicts()` looks only at the latest snapshot. It compares table rows by their tier cells
 (term, balance band, model-year range ranked within its page, so "2023-26" lines up with
-"2024-27") and short prose statements like "6-month certificate APY: 3.50%". Two pages that
-share a product word but give different rate, APY or APR numbers are a conflict. Entries are
-merged per product (mortgage purchase and refinance stay separate). The winner is the page with
-the later "effective as of" date, or the one that is not an ended offer; with neither signal
-there is no resolution. Introductory-rate columns are ignored. Dated press-release facts are
-handled separately: branch counts ("12 branch office locations") and "Nth time X recognized
-Dupaco" differ between old and new releases, and the value on the latest-dated release wins.
+"2024-27") and short prose statements like "6-month certificate APY: 3.50%" (not from blog or
+news pages). Two pages that share a product word but give different rate, APY or APR numbers are
+a conflict; entries are merged per product (mortgage purchase and refinance stay separate).
+The winner is the block with the later freshness date; without dates, the one that is not an ended
+offer; without that, the more authoritative page type (rate sheet and product over service and
+document, over blog and news, over calculators); otherwise there is no resolution.
+Introductory-rate columns are ignored. Dated press-release facts are handled separately: branch
+counts and "Nth time X recognized Dupaco" differ between old and new releases, and the value on
+the latest-dated release wins.
 
 ## Repository layout
-The solution is the top-level `*.py` modules (`solution.py` is the entry point). `tools/` holds
-offline development scripts (a score gate and a report generator); they are not imported by
-the solution and are not part of the graded system.
+The solution is the top-level `*.py` modules; `solution.py` is the entry point. Nothing else is
+needed to run it.
 
 ## Honest disclosure
 The approach is general-purpose, but some rules were chosen after reading the 40 practice
-questions: the branch-count and "Nth time X recognized" press-release patterns, the small alias
-and tier-word lists, excluding blog and press-release pages from rate answers, and treating
-one-off "relief" programs as exceptional. No answer, number or URL from the practice set is
-stored in the code.
+questions: the branch-count and "Nth time X recognized" press-release patterns, the evidence
+kinds (phone, eligibility, program amount, "how many"), the small alias, filler and tier-word
+lists, excluding blog and press-release pages from rate answers, and treating one-off "relief"
+programs as exceptional. No answer, number or URL from the practice set is stored in the code.
 
 ## Known gaps
 - Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
   counts, fees and award facts that differ between pages are not detected.
-- Answers are verbatim rows or passages (except the press-release sentences); the
-  "highest/lowest" pick is not applied.
+- Answers are verbatim rows or passages (except the press-release and link sentences); the
+  "highest/lowest" pick is not applied, and "check a stated value" questions are not supported.
 - Change answers compare the best-matching row in each snapshot; if a table was restructured
-  between the two, the rows may be different tiers.
-- One-off facts that sit in prose (eligible states, a program's amount, a wallet list, a
-  contact phone number) are only found when ordinary search ranks the right passage first.
+  between the two, the rows may be different tiers; count questions do not take the change path.
+- "Last year" is not resolved to a calendar year: "how many employees used Volunteer Time Off
+  last year" returns the best-matching statistic, which may not be the one a reader expects.
+- One-off facts in prose are found only when the question matches an evidence kind or ordinary
+  search ranks the right passage first.

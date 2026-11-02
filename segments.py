@@ -45,7 +45,7 @@ _MEMBERSHIP = re.compile(r"\b(?:eligib\w*|join|become a member|membership|member
 SEGMENTS = {
     "rate": ({"rates", "product"}, {"blog", "news", "calculator"}),
     "news": ({"news"}, {"calculator"}),
-    "contact": ({"service"}, {"blog", "calculator"}),
+    "contact": ({"service"}, {"blog", "news", "calculator"}),
     "membership": ({"service", "product"}, {"blog", "news"}),
     "policy": ({"product", "service", "document"}, {"blog", "news"}),
     "general": (set(), set()),
