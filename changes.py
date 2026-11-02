@@ -10,9 +10,11 @@ import re
 from typing import Optional
 
 from blocks import Block
+from conflicts import _tier_ranks
 from contract import Source
 from matching import MONEY_WORDS, select_blocks
 from pressfacts import answer_from_facts, sentence_for
+from qualifiers import YEAR_SPAN, caption_words, parse_question, year_spans_in
 from textnorm import MONTHS, clean, content_tokens
 from views import SnapshotView
 
@@ -20,7 +22,7 @@ _CHANGE_WORDS = re.compile(
     r"\b(?:chang(?:e|ed|es|ing)|since|versus|vs\.?|compared? (?:to|with)|increase[ds]?|decrease[ds]?|"
     r"(?:went|go|goes|gone|going) (?:up|down)|rise[sn]?|rose|dropp?(?:ed)?|fell|used to|previously|happen(?:ed|s)? to|differen(?:t|ce))\b", re.I)
 # "since May", "from March 2026", "in May", "vs May": the month the question compares with.
-_REFERENCE = re.compile(rf"\b(?:since|from|in|as of|during|versus|vs\.?|compared? (?:to|with))\s+"
+_REFERENCE = re.compile(rf"\b(?:since|after|from|in|as of|during|versus|vs\.?|compared? (?:to|with))\s+"
                         rf"(?P<month>{'|'.join(MONTHS)})(?:\s+(?P<year>\d{{4}}))?\b")
 _MONTH_WORD = re.compile(rf"\b(?:{'|'.join(MONTHS)})(?:\s+\d{{4}})?\b")
 
@@ -118,21 +120,56 @@ def change_answer(views: list[SnapshotView], question: str) -> Optional[tuple[st
     if not now or not then:
         return None
     source = Source(now[0].url, latest.snapshot_id, now[0].text[:200])
-    changed = _changed_rows(now, then)
+    changed = _changed_rows(latest, reference, now[0], then[0], topic)
     if not changed:
         return f"No change since {reference.taken_on}: " + "\n".join(b.text for b in now), source
     return "\n".join(f"Now: {n}\nAs of {reference.taken_on}: {t}" for n, t in changed), source
 
 
-def _changed_rows(now: list[Block], then: list[Block]) -> list[tuple[str, str]]:
-    """(now, then) text for each row whose figures differ, pairing rows of the same label (the same
-    tier, term or model year); blocks without a partner are compared in order."""
-    by_label = {b.label: b for b in then if b.is_row}
-    pairs = []
-    for i, block in enumerate(now):
-        other = by_label.get(block.label) if block.is_row else (then[i] if i < len(then) else None)
-        if other is not None and other.text != block.text:
-            pairs.append((block.text, other.text))
-    if not pairs and len(now) == 1 and len(then) == 1 and now[0].text != then[0].text:
-        pairs.append((now[0].text, then[0].text))
-    return pairs
+MAX_CHANGED_ROWS = 8
+_FIRST_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _values(row: Block) -> tuple[tuple[str, str], ...]:
+    """The row's figures as (kind, first number): "2.90% APR for 6 mos." and "2.90%" are one value."""
+    return tuple((kind, m.group(0) if (m := _FIRST_NUMBER.search(cell)) else cell) for kind, cell in row.figures)
+
+
+def _tier_key(row: Block, ranks: dict[tuple[str, str], list[int]]) -> str:
+    """The row's tier (balance band, term, model-year rank) without the product name some pages
+    repeat in the label, so one tier has the same key on the old and the new page."""
+    product = set(content_tokens(row.caption))
+    tier = [seg for seg in " ".join(row.label.split()).split(" | ") if not set(content_tokens(seg)) <= product]
+    key = YEAR_SPAN.sub("", " | ".join(tier).lower())
+    spans = year_spans_in(row.label)
+    return f"{key} #tier{ranks[row.url, row.caption].index(spans[0][1])}" if spans else key
+
+
+def _table_rows(view: SnapshotView, url: str, words: frozenset[str]) -> list[Block]:
+    return [b for b in view.index.blocks if b.is_row and b.figures and b.url == url and caption_words(b) == words]
+
+
+def _fitting(view: SnapshotView, rows: list[Block], best: Block, topic: str) -> dict[str, Block]:
+    """The rows that fit the question as well as the best block does, keyed by tier."""
+    info = parse_question(clean(topic))
+    floor = round(info.fit(best, True), 1)
+    ranks = _tier_ranks(rows)
+    return {_tier_key(r, ranks): r for r in rows if round(info.fit(r, True), 1) >= floor}
+
+
+def _changed_rows(latest: SnapshotView, reference: SnapshotView, now: Block, then: Block, topic: str) -> list[tuple[str, str]]:
+    """(now, then) text for each tier of the topic's table whose figures differ between the two views.
+    Each view contributes its best-ranked table (ranking already prefers the current page over a stale
+    copy); tiers are matched by key. Single blocks that are not table rows are compared directly."""
+    if not now.is_row:
+        return [(now.text, then.text)] if now.text != then.text else []
+    now_by_tier = _fitting(latest, _table_rows(latest, now.url, caption_words(now)), now, topic)
+    # the old best block may sit in another table when the question is vague ("mortgage rates"):
+    # then the product named by the new table finds the old one
+    for old in (then, *select_blocks(reference.index, f"{topic} {now.caption}")[:1]):
+        then_rows = _table_rows(reference, old.url, caption_words(old)) if old.is_row else []
+        then_by_tier = _fitting(reference, then_rows, old, topic) if then_rows else {}
+        if set(now_by_tier) & set(then_by_tier):
+            pairs = [(now_by_tier[k], then_by_tier[k]) for k in now_by_tier if k in then_by_tier and _values(now_by_tier[k]) != _values(then_by_tier[k])]
+            return [(n.text, t.text) for n, t in pairs[:MAX_CHANGED_ROWS]]
+    return [(now.text, then.text)] if now.text != then.text else []
