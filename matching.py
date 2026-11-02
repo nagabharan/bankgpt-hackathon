@@ -26,6 +26,7 @@ MAX_BLOCKS = 6
 EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
+NO_AMOUNT_FACTOR = 0.4  # a block without an amount, when the question asks how much
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
 ALIASES = {
@@ -33,11 +34,13 @@ ALIASES = {
     "eligible": ("member", "membership"), "eligibility": ("member", "membership"), "join": ("member", "membership"),
     "student": ("college", "university"), "college": ("student", "university"), "university": ("student", "college"),
     "cost": ("fee", "price"), "overdraw": ("overdraft",), "overdrawn": ("overdraft",), "charge": ("fee",),
+    "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
+    "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
-ALIAS_NO_SEARCH = frozenset({"share"})  # satisfies a coverage check but must not pull in other products
+ALIAS_NO_SEARCH = frozenset({"share", "become", "qualify", "open", "serving"})  # satisfies a coverage check but must not pull in other products
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 HIGHEST = frozenset("best highest higher largest maximum top".split())
@@ -49,7 +52,7 @@ LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type
 PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
-_HOW_MUCH = re.compile(r"\bhow much\b", re.I)
+_HOW_MUCH = re.compile(r"\bhow much\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
@@ -162,7 +165,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     """(score, doc_id) for the searched blocks that answer the question, best first."""
     wants_link = bool(LINK_WORDS.intersection(q.query))
     skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
-    required = [t for t in q.query if t not in skipped]
+    wants_amount = bool(_HOW_MUCH.search(q.raw))
+    required = [t for t in q.query if t not in skipped and not (wants_amount and t == "amount")]
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
     existence = bool(_EXISTENCE.search(q.raw))
@@ -179,8 +183,10 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             continue
         if existence and (coverage(index, topic_required, block) < 1.0):
             continue  # "does Dupaco have X": a block that lacks part of X does not show Dupaco has it
-        if _HOW_MUCH.search(q.raw) and not _MONEY_OR_PERCENT.search(block.text):
-            continue  # "how much" asks for an amount
+        if wants_amount and not _MONEY_OR_PERCENT.search(block.text):
+            if q.asks_money:
+                continue  # "how much is the fee" asks for an amount
+            factor *= NO_AMOUNT_FACTOR  # "how much do I need to join": the passage with an amount is likelier
         scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
                        * affirmative_factor(q.raw, block) * url_match_factor(topic_words, block.url)
                        * (EXPIRED_FACTOR if block.expired else 1.0), doc_id))
@@ -385,3 +391,53 @@ def best_link(index: Index, query: list[str]) -> str:
         return (HOST_WORD_WEIGHT * host_hits + path_hits, uses[link], link)
     best = max(uses, key=score, default="")
     return best if best and score(best)[0] > 0 else ""
+
+
+BODY_MAX_BLOCKS = 2  # a bare heading is followed by its paragraph and, when short, the line after it
+BODY_SHORT_LINE = 100
+
+
+def _label(text: str) -> str:
+    return text.split(":")[0] if ":" in text else ""
+
+
+def _body_after(blocks: list[Block], i: int) -> list[Block]:
+    """The paragraph right after block `i` on its page, and a short line after that (a date, a label).
+    A heading that already holds a figure (an address line) only takes continuation lines under the
+    same label."""
+    body = []
+    heading = blocks[i]
+    has_figure = any(c.isdigit() for c in heading.text)
+    for follower in blocks[i + 1:i + 1 + BODY_MAX_BLOCKS]:
+        if follower.url != heading.url or follower.is_row or ((body or has_figure) and len(follower.text) > BODY_SHORT_LINE):
+            break
+        if has_figure and (not _label(heading.text) or _label(follower.text) != _label(heading.text)):
+            break
+        body.append(follower)
+    return body
+
+
+def _short_blocks(index: Index) -> dict[str, list[int]]:
+    """Positions of each short, non-row block text (headings and headlines)."""
+    found: dict[str, list[int]] = {}
+    for i, b in enumerate(index.blocks):
+        if not b.is_row and len(b.text) <= 100:
+            found.setdefault(b.text, []).append(i)
+    return found
+
+
+def with_body(index: Index, blocks: list[Block]) -> list[Block]:
+    """A block that is only a heading ("Application period: ..." / a headline with no sentence) is
+    followed by the paragraphs under it. A headline repeated on other pages (as a teaser) is read
+    where its body is longest, which is the article itself."""
+    copies = index.cached("heading_copies", lambda: _short_blocks(index))
+    result = []
+    for block in blocks:
+        if (block.is_row or len(block.text) > 100 or block.text.rstrip().endswith((".", "!", "?"))
+                or any(other is not block and other.url == block.url for other in blocks)):  # the page's other passages are chosen already
+            result.append(block)
+            continue
+        best = max(copies[block.text], key=lambda i: (sum(len(b.text) for b in _body_after(index.blocks, i)), -i))
+        result.append(index.blocks[best])
+        result.extend(b for b in _body_after(index.blocks, best) if b not in blocks)
+    return result
