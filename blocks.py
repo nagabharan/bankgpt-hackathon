@@ -188,6 +188,19 @@ def _path_words(url: str) -> str:
     return " ".join(_path_segments(url)[-2:])
 
 
+_DATELINE_PLACE = re.compile(r"^[#*\s]*([A-Z][A-Z .'-]{2,30}),\s*(?:[A-Z][a-z]+\.?)\s*[-\u2013\u2014]")
+
+
+def _dateline_place(lines: list[str]) -> str:
+    """The city a press release is datelined in ("CEDAR FALLS, Iowa-..."), lower-cased: the later
+    passages of the release speak of "the learning lab" without naming it."""
+    for line in lines[:12]:
+        match = _DATELINE_PLACE.match(line)
+        if match:
+            return match.group(1).lower()
+    return ""
+
+
 class _PageParser:
     """Walks a page once, emitting table-row and prose blocks."""
 
@@ -254,6 +267,10 @@ def parse_page(url: str, markdown: str, title: str = "", cleaned: Optional[str] 
     """`cleaned` is clean(markdown), when the caller already has it."""
     lines = (clean(markdown) if cleaned is None else cleaned).splitlines()
     parser = _PageParser(url, title, page_date(markdown))
+    place = _dateline_place(lines)
+    if place:
+        parser.page_words = f"{parser.page_words} {place}"
+        parser.context = parser.page_words
     i = 0
     while i < len(lines):
         line = lines[i].strip()

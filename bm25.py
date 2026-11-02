@@ -46,6 +46,9 @@ class Index:
     def document_frequency(self, token: str) -> int:
         return self._text_df.get(token, 0)
 
+    def df(self, token: str) -> int:
+        return self._text_df.get(token, 0)
+
     def idf(self, token: str) -> float:
         df = self._text_df.get(token, 0)
         return math.log(1 + (len(self.blocks) - df + 0.5) / (df + 0.5))

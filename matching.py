@@ -10,10 +10,10 @@ from typing import NamedTuple
 from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
-from qualifiers import QuestionInfo, fact_key, parse_question, year_spans_in
+from qualifiers import QuestionInfo, fact_key, parse_question, tier_words_in, year_spans_in
 from schedules import OPENING, asks_schedules, distinct_schedules
 from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
-from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
+from textnorm import MONEY_MARK, MONTHS, clean, content_tokens, plural_nouns, stem
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
 # Share of the question's idf mass the block must cover, else it does not answer the question.
@@ -26,6 +26,7 @@ MAX_BLOCKS = 6
 EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
+INFLECTION_MIN_IDF = 5.0  # "backed" -> "back" is another word: a common base form is not accepted
 NO_AMOUNT_FACTOR = 0.4  # a block without an amount, when the question asks how much
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
@@ -37,6 +38,7 @@ ALIASES = {
     "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
     "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
     "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",),
+    "intro": ("introductory", "introduction"), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
@@ -53,6 +55,7 @@ LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type
 PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply", "reward"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
+_CODE = re.compile(r"[a-z]{3,}\d{2,}$")
 _HOW_MUCH = re.compile(r"\bhow much\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
@@ -65,7 +68,7 @@ _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{
 # one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
 # A price sits next to a price word; an address has a number or an @ in it.
 _PRICE_SHAPE = re.compile(rf"\b(?:price|cost|fee|charge)s?\b\W+(?:\w+\W+){{0,8}}?(?:{MONEY_MARK.pattern})|(?:{MONEY_MARK.pattern})\W*(?:\w+\W+){{0,8}}?\b(?:price|cost|fee|charge)", re.I)
-_ADDRESS_SHAPE = re.compile(r"\b\d{5}\b|@|\bP\.?\s?O\.? Box\b|\b(?:St|Ave|Rd|Blvd|Hwy|Pkwy)\b|\b(?:Street|Avenue|Road|Boulevard|Highway|Drive)\b", re.I)
+_ADDRESS_SHAPE = re.compile(r"\b\d{5}(?:-\d{4})?\b|@|\bP\.?\s?O\.? Box\b|\b\d{1,5}\s+(?:[A-Za-z.]+\s+){1,3}(?:St|Ave|Rd|Blvd|Hwy|Pkwy|Dr|Street|Avenue|Road|Boulevard|Highway|Drive)\b", re.I)
 VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "price": _PRICE_SHAPE, "hour": _CLOCK_TIME, "address": _ADDRESS_SHAPE}
 
 
@@ -131,24 +134,64 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
 
 def aliases_of(index: Index, token: str) -> tuple[str, ...]:
     """Fixed aliases, else the words an acronym the site defines stands for (HSA, HELOC)."""
-    return ALIASES.get(token) or index.acronyms.get(token, ())
+    return ALIASES.get(token) or index.acronyms.get(token) or tuple(f for f in _inflections(token) if index.idf(f) >= INFLECTION_MIN_IDF) or _parts_of(index, token)
+
+
+def _parts_of(index: Index, token: str) -> tuple[str, ...]:
+    """The rarer half of a run-together name the site spells as two words ("homeready" -> "ready")."""
+    if len(token) < 8 or not token.isalpha() or index.df(token) > 3:
+        return ()
+    halves = [(token[:i], token[i:]) for i in range(3, len(token) - 2)]
+    found = [max(pair, key=index.idf) for pair in halves if all(index.df(p) > 0 for p in pair)]
+    return tuple(dict.fromkeys(found[:1]))
+
+
+@lru_cache(maxsize=1 << 12)
+def _inflections(token: str) -> tuple[str, ...]:
+    """The base forms of a word ending -ing, -ed or -ers ("referring" -> "refer"): a question may
+    use another form of the word the site uses."""
+    for suffix in ("ing", "ers", "ed"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 4 and token.isalpha():
+            base = token[:-len(suffix)]
+            forms = [base, base + "e"]
+            if base[-1] == base[-2]:
+                forms.append(base[:-1])  # "referring" -> "referr" -> "refer"
+            return tuple(dict.fromkeys(forms))
+    return ()
 
 
 def with_aliases(index: Index, query: list[str]) -> list[str]:
     return query + [alias for t in query if t not in ALIAS_NO_SEARCH for alias in aliases_of(index, t)]
 
 
+_CAPITALISED = re.compile(r"(?<![.?!]\s)(?<!^)\b[A-Z][a-z]{3,}\b")
+_NOT_ENTITIES = frozenset("monday tuesday wednesday thursday friday saturday sunday dupaco".split())
+ENTITY_MIN_IDF = 6.0  # a capitalised word that is rare on the site names a place or a program
+
+
+def _entities(index: Index, raw: str) -> frozenset[str]:
+    """Rare capitalised words after the first ("the Platteville branch"): they name the place or
+    program asked about and must appear in an answer's passage or page title."""
+    found = set()
+    for word in _CAPITALISED.findall(raw):
+        token = stem(word.lower())
+        if token not in _NOT_ENTITIES and word not in MONTHS and index.idf(token) >= ENTITY_MIN_IDF and index.df(token) > 0:
+            found.add(token)
+    return frozenset(found)
+
+
+def _shows_rate(block: Block) -> bool:
+    return bool(_MONEY_OR_PERCENT.search(block.text)) and "%" in block.text and (block.is_row or bool(_RATE_NEAR_PERCENT.search(block.text)))
+
+
 def has_asked_value(query: list[str], block: Block) -> bool:
-    for word, shape in VALUE_SHAPES.items():
-        if word not in query:
-            continue
-        if not shape.search(block.text):
-            return False
-        if word in RATE_WORDS and "%" not in block.text:
-            return False  # a price is not a rate
-        if word in RATE_WORDS and not block.is_row and not _RATE_NEAR_PERCENT.search(block.text):
-            return False  # a sentence must tie the percent to a rate ("80% of costs" is not a rate)
-    return True
+    asked = [word for word in VALUE_SHAPES if word in query]
+    other = [word for word in asked if word not in RATE_WORDS]
+    if any(not VALUE_SHAPES[word].search(block.text) for word in other):
+        return False
+    if other and any(word in RATE_WORDS for word in asked):
+        return True  # "the monthly fee on 1st Rate Checking": "rate" is part of a name, the fee is the value asked
+    return all(_shows_rate(block) for word in asked if word in RATE_WORDS)
 
 
 def _host(url: str) -> str:
@@ -228,6 +271,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
 
     hits = index.search(with_aliases(index, q.query), CANDIDATES, rows_only)
     required = _without_framing_words(index, required, hits)
+    entities = _entities(index, q.raw)
+    codes = [t for t in required if _CODE.match(t)]  # "CHECK500": a code named in the question must be in the block
     existence = bool(_EXISTENCE.search(q.raw))
     topic_required = [t for t in required if t != "dupaco"]
     scored = []
@@ -240,6 +285,10 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             continue
         if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
+        if codes and not set(codes) <= block_words(block):
+            continue
+        if entities and not entities <= block_words(block):
+            continue  # "Platteville": a passage about another place does not answer
         if existence and (coverage(index, topic_required, block) < 1.0):
             continue  # "does Dupaco have X": a block that lacks part of X does not show Dupaco has it
         if wants_amount and not _MONEY_OR_PERCENT.search(block.text):
@@ -318,6 +367,7 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
 
 # Wordings that ask for a rate or for opening hours without saying so.
 _PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_OFFER_WORDS = re.compile(r"\b(?:cash ?back|promo\w*|bonus|offers?|codes?|rewards?|referral|refer\w*)\b", re.I)  # earning an offer is not a rate
 _STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
 
 
@@ -328,7 +378,8 @@ def with_implied_words(text: str, query: list[str]) -> list[str]:
     """Add the word a wording implies: "what does it pay?" or a stated percent asks for a rate,
     "when is it open?" for hours."""
     bonus = any(root(t) in _BONUS_ROOTS for t in query)  # "how much can I earn by referring a friend" asks for an amount
-    extra = (["rate"] if (_PAYS.search(text) or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) and not bonus else [])
+    pays = _PAYS.search(text) and not _OFFER_WORDS.search(text)
+    extra = (["rate"] if (pays or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) and not bonus else [])
     extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
     return query + extra
 
@@ -489,6 +540,31 @@ def _short_blocks(index: Index) -> dict[str, list[int]]:
         if not b.is_row and len(b.text) <= 100:
             found.setdefault(b.text, []).append(i)
     return found
+
+
+_PROCESS = re.compile(r"\bwhat (?:do|will|would) i (?:get|have to|need)|\bhow (?:do|does|can|to)\b|\bsteps?\b|\brequirements?\b|\bqualify\b|\bwork\b", re.I)
+_OFFER_PAGE = re.compile(r"-lp$|offer$", re.I)
+STEPS_MAX_BLOCKS = 8
+STEPS_MAX_CHARS = 400
+
+
+def with_steps(index: Index, blocks: list[Block], question: str) -> list[Block]:
+    """An offer on a landing page spells out its steps in the passages after the one that names the
+    code ("Add Money", "Get Paid"): a "what do I have to do" question gets them too."""
+    first = blocks[0]
+    if (first.is_row or not _PROCESS.search(question) or not _OFFER_PAGE.search(first.url.split("?")[0].rstrip("/").rsplit("/", 1)[-1])
+            or not _OFFER_WORDS.search(question)):
+        return blocks
+    i = next((n for n, b in enumerate(index.blocks) if b is first), None)
+    if i is None:
+        return blocks
+    steps = []
+    for follower in index.blocks[i + 1:i + 1 + STEPS_MAX_BLOCKS]:
+        if follower.url != first.url or follower.is_row or len(follower.text) > STEPS_MAX_CHARS:
+            break
+        steps.append(follower)
+    return blocks + [b for b in steps if b not in blocks]
+
 
 
 _ADDRESS_WORDS = frozenset({"address", "mailing", "location", "located", "where"})
