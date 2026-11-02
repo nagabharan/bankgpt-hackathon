@@ -13,6 +13,7 @@ from evidence import Kind, kind_for, phone_in
 from qualifiers import TIER_WORDS, QuestionInfo, fact_key, parse_question, tier_words_in, year_spans_in
 from schedules import OPENING, asks_schedules, distinct_schedules
 from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
+from lexicon import COVERAGE_ALIASES, SEARCH_ALIASES, typo_table
 from textnorm import MONEY_MARK, MONTHS, STOPWORDS, STREET_ABBREVIATIONS, clean, content_tokens, plural_nouns, stem
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
@@ -50,7 +51,9 @@ ALIASES = {
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
-ALIAS_NO_SEARCH = frozenset({"share", "become", "qualify", "open", "serving", "first", "1st"})  # satisfies a coverage check but must not pull in other products
+for _word, _more in {**SEARCH_ALIASES, **COVERAGE_ALIASES}.items():
+    ALIASES[_word] = tuple(dict.fromkeys((*ALIASES.get(_word, ()), *_more)))
+ALIAS_NO_SEARCH = frozenset({"share", "become", "qualify", "open", "serving", "first", "1st", *COVERAGE_ALIASES})  # satisfies a coverage check but must not pull in other products
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 HIGHEST = frozenset("best highest higher largest maximum top".split())
@@ -567,6 +570,7 @@ def warm(index: Index) -> None:
     _product_words(index)
     index.cached("heading_copies", lambda: _short_blocks(index))
     index.cached("teaser_sources", lambda: _opening_index(index))
+    typo_table(index)
 
 
 def lacks_named_product(index: Index, required: list[str], block: Block) -> bool:

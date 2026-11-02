@@ -85,6 +85,15 @@ sentence (`sentences.py`); a question that asks for a value (how much, how long,
 phone, how many) is answered by the one sentence that shows that kind of value, with guards that
 keep a sentence about another topic from answering.
 
+**Lexicon and typed facts.** `lexicon.py` holds the question-side word tables: chat shorthand,
+money slang, family words for membership questions, everyday paraphrases (kick in, cash out,
+overseas), filler words, and a conservative one-edit typo fixer. Each entry is either a search
+expansion or coverage-only, and was checked against questions that must be refused. `facts.py`
+extracts phone, address, fee and date facts at ingest; a question asking for one of those kinds
+is answered with the stored sentence when the fact is unique and the search answer lacks it.
+Change questions are answered as a short chronology across the snapshots ("X, then Y (from
+date). Current: Y"), and an old tier name maps to its current one by rank in the same table.
+
 ## Deciding what is current
 The newest snapshot wins. A block's freshness is its table's "effective as of" date, else the
 date its page states for itself. Among candidates that score about the same, the freshest wins,

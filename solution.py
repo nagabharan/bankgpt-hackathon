@@ -25,7 +25,8 @@ from sentences import asked_shapes, better_than, select_sentences
 from qualifiers import parse_question
 from schedules import asks_schedules
 from terminology import current_names
-from textnorm import clean, content_tokens, normalize_question
+from lexicon import correct_typos
+from textnorm import STOPWORDS, clean, content_tokens, normalize_question, stem
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
@@ -34,6 +35,7 @@ _STATED_FEE = re.compile(r"\$(\d[\d,.]*)\s+(?:\w+\s+)?(?:fee|charge)", re.I)  # 
 _FEE_WORD = re.compile(r"\b(?:fees?|charges?)\b", re.I)
 NOT_LISTED = "That isn't listed on our website; please contact us."
 OFFER_ENDED = "That offer is no longer available."
+_TYPO_SKIP = frozenset(STOPWORDS)  # filler words are not typos of site words
 
 MAX_SOURCES = 5
 CURRENT_NAMES = True  # a model-year bracket the site has renamed is read under its current name
@@ -105,6 +107,8 @@ class KnowledgeBase:
 
     def _answer(self, question: str, as_of: Optional[str]) -> Answer:
         question = normalize_question(question)
+        if self.views:
+            question = correct_typos(question, self.views[-1].index, stem, _TYPO_SKIP)
         day = iso_date(as_of)
         known = [v for v in self.views if day is None or v.taken_on <= day]  # nothing after as_of may leak in
         if len(known) >= 2 and is_change_question(question):

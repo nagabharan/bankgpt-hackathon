@@ -6,6 +6,8 @@ import html
 import re
 from functools import lru_cache
 
+from lexicon import CASUAL_WORDS, FILLER_WORDS, fold_relatives
+
 # A leading (?=...) in the patterns below only restates the first character every match starts
 # with; it changes no match but lets the engine skip most positions (clean() dominates ingest).
 # Footnote markers are digits glued to a value or header: "4.00%1", "5.39% APR1", "(APY)1".
@@ -76,24 +78,10 @@ def clean(text: str) -> str:
     return _SYMBOL_SPACE.sub(r"\1", text)
 
 
-# Chat filler of a question (dropped from questions only: these words also occur in page text).
-_QUESTION_FILLER = re.compile(r"\b(?:but|still|also|put|newest|latest|newer|big|bracket|pls|plz|thx|thanks|hey|hi|hello|yo|okay|btw|lol|asap|anyway|honestly|basically|kinda|sorta|ish|roughly|approx|approximately|around(?!\s+(?:"+"|".join(MONTHS)+r"))|throw|toss|stick|sits|sit|ahead|better|kid|kids)\b[,.!]?\s*", re.I)
+# Chat filler of a question (dropped from questions only: these words also occur in page text). "around" stays
+# before a month name, where the date reader needs it.
+_QUESTION_FILLER = re.compile(r"\b(?:" + "|".join(FILLER_WORDS) + r"|around(?!\s+(?:" + "|".join(MONTHS) + r")))\b[,.!]?\s*", re.I)
 
-# Casual wording of a question, folded to the words the site uses. Applied to questions only.
-_CASUAL_WORDS = (
-    (re.compile(r"\bcerts?\b", re.I), "certificate"),
-    (re.compile(r"\bmos?\b", re.I), "months"),
-    (re.compile(r"\byrs?\b", re.I), "years"),
-    (re.compile(r"\bu\b", re.I), "you"),
-    (re.compile(r"\bcds?\b(?!\s*[/)(,]*\s*(?:or\s+)?certificates?\b)(?<!certificate\s\()(?<!certificate\s)", re.I), "certificate"),  # "CD / certificate" already says it
-    (re.compile(r"\bmax\b\.?", re.I), "maximum"),
-    (re.compile(r"\b(?:harley(?:[- ]davidson)?|yamaha|kawasaki|ducati|triumph|vespa|scooter|moped|dirt ?bike|sportbike|cruiser|chopper)s?\b", re.I), "motorcycle"),
-    (re.compile(r"\b(?:civic|accord|camry|corolla|prius|altima|sentra|mustang|corvette|wrangler|jeep|tesla|f-?150|silverado|tacoma|tundra|ram|rav4|cr-?v|explorer|equinox|malibu|impala|fusion|focus|elantra|sonata|outback|forester|mazda|subaru|toyota|honda|ford|chevy|chevrolet|dodge|nissan|hyundai|kia|bmw|audi|lexus|volkswagen|vw|buick|cadillac|gmc)s?\b", re.I), "car"),
-    (re.compile(r"\bacct\b", re.I), "account"),
-    (re.compile(r"\bmin\b\.?", re.I), "minimum"),
-    (re.compile(r"\b(?:suv|pickup|pick-up|truck|sedan|minivan|van|crossover|coupe|hatchback|wagon)s?\b", re.I), "car"),
-    (re.compile(r"\b(\d+)(?=(?:yr|mo)s?\b)", re.I), r"\1 "),  # "30yr" -> "30 yr"
-)
 # "(up to 832,750)", "for 10000": a bare number after an amount word is dollars, unless it reads as a year
 # or a term ("for 60 months").
 _BARE_AMOUNT = re.compile(r"\b(up to|under|below|over|above|less than|more than|at least|at most|worth|for|of|with|about|have|has|had|deposit|borrow)\s+"
@@ -160,8 +148,9 @@ def normalize_question(question: str) -> str:
     text = re.sub(r"\brekeys?\b", "re-key", text, flags=re.I)
     text = _IRA_CERTIFICATE.sub(r"\1", text)
     text = _YEAR_MODEL.sub(r"\1 model year", text)
-    for pattern, replacement in _CASUAL_WORDS:
+    for pattern, replacement in CASUAL_WORDS:
         text = pattern.sub(replacement, text)
+    text = fold_relatives(text)
     text = _BARE_AMOUNT.sub(_dollars, text)
     text = _GRAND.sub(lambda m: f"${round(float(m.group(1)) * 1000)}", text)
     text = _AMOUNT_RANGE.sub(r"$\1", text)
