@@ -129,7 +129,7 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
-        scored.append((score * factor * segment_factor(intent, block.url), doc_id))
+        scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
@@ -175,7 +175,7 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
         if (kind.shows(block.text) and info.fit(block) and coverage(index, required, block) >= kind.min_coverage
                 and has_anchor(index, required, block)
                 and not (kind.skip_articles and any(part in block.url for part in ARTICLE_PATHS))):
-            found.append((score * segment_factor(intent, block.url), block))
+            found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0), block))
             if len(found) == EVIDENCE_POOL:
                 break
     if not found:

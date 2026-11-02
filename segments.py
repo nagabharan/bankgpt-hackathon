@@ -6,6 +6,7 @@ questions into an intent, and each intent prefers some page types and disfavours
 """
 from __future__ import annotations
 
+import math
 import re
 
 PREFERRED_FACTOR = 1.25
@@ -77,3 +78,14 @@ AUTHORITY = {"rates": 4, "product": 3, "service": 2, "document": 2, "blog": 1, "
 
 def authority(url: str) -> int:
     return AUTHORITY[page_type(url)]
+
+
+# Fixed prior by page type: how likely a page of this type is to be the one that states a fact.
+TYPE_PRIOR = {"rates": 1.3, "product": 1.15, "service": 1.1, "document": 1.0, "news": 0.9, "blog": 0.85, "calculator": 0.75}
+HUB_STEP = 0.05
+HUB_CAP = 1.3
+
+
+def page_prior(url: str, in_links: int) -> float:
+    """Type prior times a hub prior: pages that many other pages link to are the main ones."""
+    return TYPE_PRIOR[page_type(url)] * min(HUB_CAP, 1 + HUB_STEP * math.log2(1 + in_links))

@@ -8,6 +8,7 @@ from bm25 import Index
 from blocks import Block, parse_page
 from contract import Snapshot
 from pressfacts import DatedFact, dated_facts
+from segments import page_prior
 from textnorm import clean
 
 # A block repeated on this many pages is site chrome (forms, country lists), not an answer.
@@ -44,4 +45,17 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
             blocks.append(block)
     kept = [b for b in blocks if len(pages_per_text[b.text]) < BOILERPLATE_MIN_PAGES]
     twins = {text: tuple(sorted(urls)) for text, urls in pages_per_text.items() if 1 < len(urls) < BOILERPLATE_MIN_PAGES}
-    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, Index(kept), facts, twins)
+    index = Index(kept)
+    index.page_prior = _page_priors(blocks, seen)
+    return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins)
+
+
+def _page_priors(blocks: list[Block], pages: set[str]) -> dict[str, float]:
+    """Prior for every page: its type, and how many other pages link to it."""
+    linked_from: dict[str, set[str]] = defaultdict(set)
+    for block in blocks:
+        for link in block.links:
+            target = canonical_url(link)
+            if target in pages and target != block.url:
+                linked_from[target].add(block.url)
+    return {url: page_prior(url, len(linked_from.get(url, ()))) for url in pages}
