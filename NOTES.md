@@ -78,6 +78,13 @@ answer is "That offer is no longer available."
 us" with no numbers, and `confident` is false. The question's rarest topic word must appear in
 the block, which also refuses questions about other banks or products the credit union lacks.
 
+**Casual wording and sentences.** Before parsing, `normalize_question` folds slang, abbreviations,
+amount shorthand ("35 grand"), a plain year with a vehicle word ("2018 pickup" becomes a model year)
+and relative dates ("late August") to the site's words. Long passages are also indexed sentence by
+sentence (`sentences.py`); a question that asks for a value (how much, how long, when, what age,
+phone, how many) is answered by the one sentence that shows that kind of value, with guards that
+keep a sentence about another topic from answering.
+
 ## Deciding what is current
 The newest snapshot wins. A block's freshness is its table's "effective as of" date, else the
 date its page states for itself. Among candidates that score about the same, the freshest wins,
