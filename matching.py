@@ -38,6 +38,8 @@ ALIASES = {
     "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
     "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
     "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",),
+    "send": ("transfer", "outgoing"), "sending": ("transfer", "outgoing"), "sent": ("transfer", "outgoing"), "receive": ("incoming",), "receiving": ("incoming",),
+    "lose": ("lost",), "losing": ("lost",), "hit": ("deposit", "paid", "posted"), "cap": ("limit", "below", "maximum"),
     "intro": ("introductory", "introduction"), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
@@ -56,6 +58,7 @@ PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "ap
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
 _CODE = re.compile(r"[a-z]{3,}\d{2,}$")
+_COMPARISON = re.compile(r"\b(?:vs\.?|versus|compared? (?:to|with)|difference between)\b", re.I)  # two items asked about side by side
 _HOW_MUCH = re.compile(r"\bhow much\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
@@ -232,7 +235,7 @@ def _question(question: str) -> Question:
     asks_money = bool(MONEY_WORDS.intersection(query))
     wants_extreme = bool(RATE_WORDS.intersection(query)) and bool((HIGHEST | LOWEST).intersection(query))
     return Question(question, text, query, parse_question(text), intent_of(question, asks_money), asks_money,
-                    wants_list(text, query) or wants_extreme)  # the extreme is picked from the rates of several products
+                    wants_list(text, query) or wants_extreme or bool(_COMPARISON.search(question)))  # the extreme is picked from the rates of several products
 
 
 FRAMING_PROBE = 20  # best hits that must show a question word for it to count as part of the topic

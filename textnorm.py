@@ -1,6 +1,7 @@
 """Text normalisation shared by ingest and question handling."""
 from __future__ import annotations
 
+import calendar
 import html
 import re
 from functools import lru_cache
@@ -38,7 +39,7 @@ STOPWORDS = frozenset(
     # question filler that carries no topic
     "about any between correct current currently could did from general get give have has its keep know last like located m re ve ll d t going still new financed finance buy if into over under per bought purchased "
     "many may much need now please provide right same their them they today want was were would "
-    "spring summer fall autumn winter park will signup brand buying offered carry carries regular then back looking interested wondering considering curious trying work works "
+    "spring summer fall autumn winter park will signup brand buying offered carry carries regular then back looking interested wondering considering curious trying work works whats thats hows wanna gonna gotta lemme im ive id ill dont cant wont isnt vs versus using another once everything anything actually one not after paid "
     # contraction stubs ("isn't" -> "isn") and premise wording ("why is it only 4.1%?") carry no topic
     "isn aren doesn didn don wasn weren hasn haven why only really true actually".split()
 )
@@ -73,6 +74,71 @@ def clean(text: str) -> str:
     text = _K_AMOUNT.sub(lambda m: f"${round(float(m.group(1)) * 1000)}", text)  # "$30k" / "30K"
     text = _DOLLARS_WORD.sub(lambda m: f"${m.group(1)}", text)  # "50000 dollars"
     return _SYMBOL_SPACE.sub(r"\1", text)
+
+
+# Casual wording of a question, folded to the words the site uses. Applied to questions only.
+_CASUAL_WORDS = (
+    (re.compile(r"\bcerts?\b", re.I), "certificate"),
+    (re.compile(r"\bmos?\b", re.I), "months"),
+    (re.compile(r"\byrs?\b", re.I), "years"),
+    (re.compile(r"\bu\b", re.I), "you"),
+    (re.compile(r"\bacct\b", re.I), "account"),
+    (re.compile(r"\bmin\b\.?", re.I), "minimum"),
+    (re.compile(r"\b(?:suv|pickup|pick-up|truck|sedan|minivan|van|crossover|coupe|hatchback|wagon)s?\b", re.I), "car"),
+    (re.compile(r"\b(\d+)(?=(?:yr|mo)s?\b)", re.I), r"\1 "),  # "30yr" -> "30 yr"
+)
+_GRAND = re.compile(r"\$?\b(\d+(?:\.\d+)?)\s*(?:grand|k)\b", re.I)  # "35 grand", "5k"
+# "$5000 to $25000" / "5000-25000 balance": the tier that starts at the lower amount answers it.
+_AMOUNT_RANGE = re.compile(r"\$(\d+(?:\.\d+)?)\s*(?:to|-|and|through|thru)\s*\$?\d+(?:\.\d+)?")
+_YEAR_VEHICLE = re.compile(r"\b((?:19|20)\d\d)\s+(?:model\s+)?(?=(?:car|auto|vehicle)\b)", re.I)
+_IRA_CERTIFICATE = re.compile(r"\b(ira|roth|traditional)\s+(?:cds?|certificates?)\b", re.I)  # IRA rows are named by tier and term only
+_YEAR_MODEL = re.compile(r"\b((?:19|20)\d\d)\s+model\b(?!\s+year)", re.I)
+
+
+_MONTH_ABBREVIATIONS = {m[:3].lower(): m for m in MONTHS if m != "May"} | {"sept": "September", "may": "May"}
+_MONTH_LOOSE = re.compile(r"\b(" + "|".join(sorted(_MONTH_ABBREVIATIONS, key=len, reverse=True)) + r")(?:ust|uary|ember|ober|ch|il|e|y)?\b\.?", re.I)
+_LEADS_MONTH = re.compile(r"(?:\b(?:in|since|from|to|and|between|of|during|until|through|by|after|before|vs|versus|than|with|on)\s+(?:the\s+)?(?:(?:early|mid|late|end of|start of|beginning of)\s+)?)$", re.I)
+
+
+def _month_names(text: str) -> str:
+    """"aug 27", "in june", "since may": the capitalised month names the date readers know. A bare
+    "may" is a month only after a date preposition or before a day."""
+    def fold(match: re.Match) -> str:
+        word = match.group(1).lower()
+        name = _MONTH_ABBREVIATIONS[word]
+        after = text[match.end():match.end() + 6]
+        if word == "may" and not (_LEADS_MONTH.search(text[:match.start()]) or re.match(r"\s*\d", after)):
+            return match.group(0)
+        if word != "may" and len(match.group(0).rstrip(".")) < 4 and not (_LEADS_MONTH.search(text[:match.start()]) or re.match(r"\s*\d", after)):
+            return match.group(0)  # "mar", "jan", "dec" in running text
+        return name
+    return _MONTH_LOOSE.sub(fold, text)
+
+
+def _month_period(text: str) -> str:
+    """"early june" -> "June 15", "late august" / "end of august" -> "August 31": the day the snapshot
+    must precede. Applied after month names are capitalised."""
+    def fold(match: re.Match) -> str:
+        month = MONTHS.index(match.group(2)) + 1
+        lead = match.group(1).lower()
+        day = 15 if lead in ("early", "mid") else 1 if lead in ("start of", "beginning of") else calendar.monthrange(2026, month)[1]
+        suffix = "th" if 10 <= day % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+        return f"{match.group(2)} {day}{suffix}"  # an ordinal cannot be read as a term ("June 17-month")
+    return re.sub(r"\b(early|mid|late|end of|the end of|start of|beginning of)\s+(" + "|".join(MONTHS) + r")\b(?!\s+\d)", fold, text, flags=re.I)
+
+
+def normalize_question(question: str) -> str:
+    """Fold casual wording ("cert", "mos", "35 grand", "2018 pickup") into the words and numbers the
+    site uses, so a chatty question reaches the same rows as a formal one."""
+    text = _month_period(_month_names(question))
+    text = re.sub(r"\brekeys?\b", "re-key", text, flags=re.I)
+    text = _IRA_CERTIFICATE.sub(r"\1", text)
+    text = _YEAR_MODEL.sub(r"\1 model year", text)
+    for pattern, replacement in _CASUAL_WORDS:
+        text = pattern.sub(replacement, text)
+    text = _GRAND.sub(lambda m: f"${round(float(m.group(1)) * 1000)}", text)
+    text = _AMOUNT_RANGE.sub(r"$\1", text)
+    return _YEAR_VEHICLE.sub(r"\1 model year ", text)
 
 
 def strip_links(text: str) -> tuple[str, list[str]]:

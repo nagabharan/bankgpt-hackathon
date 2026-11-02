@@ -19,7 +19,7 @@ from contract import Answer, Conflict, Snapshot, Source
 from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, duration_notes, focused_lines, links_of, select_blocks, trim_blocks, with_body, with_steps
 from pressfacts import answer_from_facts, sentence_for
 from qualifiers import parse_question
-from textnorm import clean, content_tokens
+from textnorm import clean, content_tokens, normalize_question
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
@@ -66,6 +66,7 @@ class KnowledgeBase:
         return eligible[-1] if eligible else None
 
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
+        question = normalize_question(question)
         day = iso_date(as_of)
         known = [v for v in self.views if day is None or v.taken_on <= day]  # nothing after as_of may leak in
         if len(known) >= 2 and is_change_question(question):

@@ -22,11 +22,13 @@ _CHANGE_WORDS = re.compile(
     r"\b(?:chang(?:e|ed|es|ing)|since|versus|vs\.?|compared? (?:to|with)|increase[ds]?|decrease[ds]?|"
     r"(?:went|go|goes|gone|going) (?:up|down)|rise[sn]?|rose|dropp?(?:ed)?|fell|used to|previously|happen(?:ed|s)? to|differen(?:t|ce))\b", re.I)
 # "since May", "from March 2026", "in May", "vs May": the month the question compares with.
-_REFERENCE = re.compile(rf"\b(?:since|after|from|in|as of|during|versus|vs\.?|compared? (?:to|with))\s+"
+_REFERENCE = re.compile(rf"\b(?:since|after|from|in|as of|during|versus|vs\.?|compared? (?:to|with)|than)\s+(?:the\s+)?"
                         rf"(?P<month>{'|'.join(MONTHS)})(?:\s+(?P<year>\d{{4}}))?\b")
 _MONTH_WORD = re.compile(rf"\b(?:{'|'.join(MONTHS)})(?:\s+\d{{4}})?\b")
 
 
+_STRONG_CHANGE = re.compile(r"\b(?:chang(?:ed|es)|since|between|versus|vs\.?|compared? (?:to|with))\b", re.I)
+_PRODUCT_WORDS = frozenset("certificate special savings checking loan mortgage ira card".split())
 _HOW_MANY = re.compile(r"\b(?:how many|number of|count of)\b", re.I)
 _SEASONS = {"spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12}
 _SEASON_REFERENCE = re.compile(r"\b(?:since|from|in|during|vs\.?|versus)\s+(?:(?:the|last|this|past)\s+)?(?P<season>spring|summer|fall|autumn|winter)\b", re.I)
@@ -73,7 +75,10 @@ def _range_views(views: list[SnapshotView], question: str):
 
 def is_change_question(question: str) -> bool:
     """A change word together with a rate/fee word or a count ("how do I change my PIN" is not one)."""
-    topic_ok = MONEY_WORDS.intersection(content_tokens(clean(question))) or _HOW_MANY.search(question)
+    words = content_tokens(clean(question))
+    topic_ok = MONEY_WORDS.intersection(words) or _HOW_MANY.search(question)
+    if not topic_ok and _STRONG_CHANGE.search(question):  # "what changed on the 17-month special" names a product, not "rate"
+        topic_ok = _PRODUCT_WORDS.intersection(words)
     return bool(_CHANGE_WORDS.search(question)) and bool(topic_ok)
 
 
@@ -94,8 +99,9 @@ def _reference_view(views: list[SnapshotView], question: str) -> Optional[Snapsh
 
 def _topic(question: str) -> str:
     """The question without the change wording and the month it compares with."""
+    question = _NAMED_DAY.sub(" ", question)
     question = _SEASON_REFERENCE.sub(" ", _REFERENCE.sub(" ", question))
-    question = _MONTH_WORD.sub(" ", _NAMED_DAY.sub(" ", question))
+    question = _MONTH_WORD.sub(" ", question)
     question = re.sub(r"\b(?:between|snapshots?|crawls?|updates?|early|mid|late|the\s+one)\b", " ", question, flags=re.I)
     return _CHANGE_WORDS.sub(" ", question)
 
