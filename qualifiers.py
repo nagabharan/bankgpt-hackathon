@@ -99,6 +99,10 @@ def tier_words_in(text: str) -> frozenset[str]:
     return frozenset(w for w in words if w in TIER_WORDS)
 
 
+# "not jumbo", "non-business", "instead of the Roth": the tier is ruled out, not asked for.
+_NEGATED_TIER = re.compile(r"\b(?:not|non|no|without|excluding|except|instead of|rather than)[\s-]+(?:the\s+|a\s+)?(?P<tier>" + "|".join(sorted(TIER_WORDS | set(_TIER_SYNONYMS), key=len, reverse=True)) + r")\b", re.I)
+
+
 @dataclass(frozen=True)
 class QuestionInfo:
     terms: frozenset[int]
@@ -107,12 +111,15 @@ class QuestionInfo:
     consumed: frozenset[str]  # tokens the qualifiers already account for (digits, units)
     amounts: tuple[float, ...] = ()  # dollar amounts the question names (a balance, a loan size)
     calendar_years: tuple[int, ...] = ()  # years the question is about in time ("in 2023"), not model years
+    excluded_tiers: frozenset[str] = frozenset()  # tiers the question rules out ("regular, not jumbo")
 
     def fit(self, block: Block, ignore_tiers: bool = False) -> float:
         """0 rules the block out; otherwise a factor to scale its score by.
 
         `ignore_tiers` is for list questions, which want every tier of the product."""
         if self.terms and not self.terms & terms_in(block.text):
+            return 0.0
+        if self.excluded_tiers & tier_words_in(block.text):
             return 0.0
         factor = 1.0
         if self.years:
@@ -174,4 +181,8 @@ def parse_question(text: str) -> QuestionInfo:
     raw_amounts = _MONEY_AMOUNT.findall(text)
     consumed.update(raw_amounts)
     amounts = tuple(float(a) for a in raw_amounts)
-    return QuestionInfo(terms_in(text), years, tier_words_in(text), frozenset(consumed), amounts, calendar_years)
+    if amounts:  # "up to $100k", "$50,000 or more": the bound wording is covered by the amount tiers
+        consumed.update({"up", "less", "more", "below", "above"})
+    excluded = frozenset(w for m in _NEGATED_TIER.finditer(text) for w in tier_words_in(m.group("tier")))
+    consumed.update(excluded)
+    return QuestionInfo(terms_in(text), years, tier_words_in(text) - excluded, frozenset(consumed), amounts, calendar_years, excluded)

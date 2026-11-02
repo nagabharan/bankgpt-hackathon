@@ -62,9 +62,7 @@ def _range_views(views: list[SnapshotView], question: str):
     days = _named_days(question, int(views[-1].taken_on[:4]))
     if len(days) < 2:
         return None
-    (start, start_exact), (end, end_exact) = days[0], days[-1]
-    if start > end:
-        return None
+    (start, start_exact), (end, end_exact) = sorted((days[0], days[-1]))  # "June compared to May" reads either way
     if not end_exact:  # a month alone: its last day
         end = f"{end[:8]}{calendar.monthrange(int(end[:4]), int(end[5:7]))[1]:02d}"
     first = next((v for v in views if v.taken_on >= start), None) if not start_exact else \
@@ -98,7 +96,7 @@ def _topic(question: str) -> str:
     """The question without the change wording and the month it compares with."""
     question = _SEASON_REFERENCE.sub(" ", _REFERENCE.sub(" ", question))
     question = _MONTH_WORD.sub(" ", _NAMED_DAY.sub(" ", question))
-    question = re.sub(r"\b(?:between|snapshots?|crawls?)\b", " ", question, flags=re.I)
+    question = re.sub(r"\b(?:between|snapshots?|crawls?|updates?|early|mid|late|the\s+one)\b", " ", question, flags=re.I)
     return _CHANGE_WORDS.sub(" ", question)
 
 
