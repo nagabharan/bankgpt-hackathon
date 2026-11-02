@@ -39,6 +39,8 @@ ALIASES = {
 ALIAS_NO_SEARCH = frozenset({"share"})  # satisfies a coverage check but must not pull in other products
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
+HIGHEST = frozenset("best highest higher largest maximum top".split())
+LOWEST = frozenset("lowest lower smallest least cheapest".split())
 # Words that ask for a link or for every item, not topics.
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
@@ -145,8 +147,9 @@ def _question(question: str) -> Question:
     text = clean(question)
     query = with_implied_words(text, content_tokens(text))
     asks_money = bool(MONEY_WORDS.intersection(query))
+    wants_extreme = bool(RATE_WORDS.intersection(query)) and bool((HIGHEST | LOWEST).intersection(query))
     return Question(question, text, query, parse_question(text), intent_of(question, asks_money), asks_money,
-                    wants_list(text, query))
+                    wants_list(text, query) or wants_extreme)  # the extreme is picked from the rates of several products
 
 
 def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float, int]]:
@@ -281,7 +284,27 @@ def select_blocks(index: Index, question: str) -> list[Block]:
         group = [d for d in group if fit(d) >= round(q.info.fit(best, q.several), 1)]
     kept = group[:MAX_LIST_BLOCKS if q.several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
-    return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
+    unique = list({block.text: block for block in unique}.values())  # identical rows on two pages count once
+    return _extreme_rows(unique, q.query)
+
+
+_FIGURE_VALUE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _row_value(block: Block) -> float:
+    """The row's highest rate/APY/APR figure."""
+    return max((float(m.group(0)) for _, cell in block.figures for m in [_FIGURE_VALUE.search(cell)] if m), default=0.0)
+
+
+def _extreme_rows(blocks: list[Block], query: list[str]) -> list[Block]:
+    """"Highest/lowest rate": only the rows that hold the extreme value among those found."""
+    wants_high, wants_low = HIGHEST.intersection(query), LOWEST.intersection(query)
+    rows = [b for b in blocks if b.is_row and b.figures]
+    if not (wants_high or wants_low) or not RATE_WORDS.intersection(query) or len(rows) < 2:
+        return blocks
+    values = [_row_value(b) for b in rows]
+    target = max(values) if wants_high else min(v for v in values if v) if any(values) else 0.0
+    return [b for b, v in zip(rows, values) if v == target]
 
 
 _YES_NO_QUESTION = re.compile(r"^\s*(?:can|could|do|does|is|are|will)\s+(?:i|you|we|dupaco|my|your)\b", re.I)

@@ -75,7 +75,7 @@ def _count_kind(question: str) -> Optional[Kind]:
     verb = after[0] if after and after[0].endswith("ed") else ""
     action = rf"(?:[\w-]+\s+){{0,3}}{re.escape(verb[:3])}\w*" if verb else ""
     shows = re.compile(rf"\b\d[\d,]*\s+(?:[\w-]+\s+){{0,2}}{re.escape(noun)}\w*\s+{action}", re.I)
-    return Kind("count" + verb, _HOW_MANY, lambda t: bool(shows.search(t)),
+    return Kind(f"count:{noun}:{verb}", _HOW_MANY, lambda t: bool(shows.search(t)),
                 frozenset({"many", noun, verb, "use", "take", "have", "get", "last", "year"} - {""}), 0.6, False)
 
 

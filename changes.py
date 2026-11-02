@@ -25,7 +25,7 @@ _MONTH_WORD = re.compile(rf"\b(?:{'|'.join(MONTHS)})(?:\s+\d{{4}})?\b")
 
 _HOW_MANY = re.compile(r"\b(?:how many|number of|count of)\b", re.I)
 _SEASONS = {"spring": 3, "summer": 6, "fall": 9, "autumn": 9, "winter": 12}
-_SEASON_REFERENCE = re.compile(r"\b(?:since|from|in|during|vs\.?|versus)\s+(?:the\s+)?(?P<season>spring|summer|fall|autumn|winter)\b", re.I)
+_SEASON_REFERENCE = re.compile(r"\b(?:since|from|in|during|vs\.?|versus)\s+(?:(?:the|last|this|past)\s+)?(?P<season>spring|summer|fall|autumn|winter)\b", re.I)
 
 
 def is_change_question(question: str) -> bool:

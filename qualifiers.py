@@ -72,6 +72,7 @@ _AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$?(\d+(?:\.\d+)?)|\$(\d+(?:
 CALENDAR_MATCH_FACTOR = 1.3  # block's page is dated in the calendar year the question names
 CALENDAR_OTHER_FACTOR = 0.85
 NO_AMOUNT_BAND_FACTOR = 0.2  # every amount in the question lies outside the block's amount tiers
+BALANCE_TIER_FACTOR = 1.3
 TIGHTNESS_EXPONENT = 0.1
 TIGHTNESS_FLOOR = 0.5
 
@@ -127,6 +128,8 @@ class QuestionInfo:
                 factor *= NO_AMOUNT_BAND_FACTOR
             elif bands:  # "$100,000 or less" fits a $90,000 loan better than "$832,750 or less" does
                 factor *= min(max(band_tightness(a, lo, hi) for lo, hi in bands if lo <= a <= hi) for a in self.amounts)
+                if not self.terms:  # a balance with no term asked for is a balance tier, not a fixed-term certificate
+                    factor *= BALANCE_TIER_FACTOR
         block_tiers = tier_words_in(block.text)
         if ignore_tiers:  # a list wants every ordinary tier, but not a one-off program's rate
             return factor * EXCEPTIONAL_TIER_FACTOR ** len((block_tiers & EXCEPTIONAL_TIERS) - self.tiers)
