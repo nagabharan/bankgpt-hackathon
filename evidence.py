@@ -43,7 +43,7 @@ KINDS = (
          frozenset("update change information info detail contact phone call reach number speak talk customer service support help".split()),
          0.6, True),
     Kind("places", re.compile(r"\b(?:eligib\w*|who can (?:join|become)|where (?:do|are|can) you (?:serve|operate)|which states|live in)\b", re.I),
-         _shows_places, frozenset("eligible eligibility become who can".split()), 0.6, True),
+         _shows_places, frozenset("eligible eligibility become who can state serve operate where located".split()), 0.6, True),
     Kind("amount", re.compile(r"\bwhat(?:'s| is| are)\b.*\b(?:program|promotion|grant|assistance|bonus)\b"
                r"|\bhow much (?:money )?(?:does|do|is|will)\b[^?]*\b(?:give|grant|provide|offer|assist\w*)\b", re.I),
          lambda t: bool(_DOLLAR_AMOUNT.search(t)), frozenset(), 0.6, False),

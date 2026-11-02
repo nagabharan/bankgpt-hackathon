@@ -9,7 +9,7 @@ from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question, year_spans_in
-from schedules import compares_hours, distinct_schedules
+from schedules import OPENING, asks_schedules, distinct_schedules
 from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
@@ -31,14 +31,14 @@ ALIASES = {
     "student": ("college", "university"), "college": ("student", "university"), "university": ("student", "college"),
     "cost": ("fee", "price"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
-    "transit": ("routing",), "share": ("certificate",),
+    "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 # Words that ask for a link or for every item, not topics.
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
-PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week"})  # plural nouns that do not mean "several items"
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving"})  # "savings" is a product name  # plural nouns that do not mean "several items"
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
@@ -79,8 +79,11 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
     return anchor in present or bool(present.intersection(ALIASES.get(anchor, ())))
 
 
+ALIAS_NO_SEARCH = frozenset({"share"})  # satisfies a coverage check but must not pull in other products
+
+
 def with_aliases(query: list[str]) -> list[str]:
-    return query + [alias for t in query for alias in ALIASES.get(t, ())]
+    return query + [alias for t in query if t not in ALIAS_NO_SEARCH for alias in ALIASES.get(t, ())]
 
 
 def has_asked_value(query: list[str], block: Block) -> bool:
@@ -193,19 +196,23 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
     if not found:
         return []
     if kind.name == "phone":  # among the matches, the number that is everywhere is the main line
-        return [max(found, key=lambda sb: (index.phone_counts[phone_in(sb[1].text)], sb[0]))[1]]
+        best = max(found, key=lambda sb: (index.phone_counts[phone_in(sb[1].text)], sb[0]))[1]
+        if not [t for t in required if t != "dupaco"]:  # nothing but "contact/phone/number": one plain sentence
+            digits = phone_in(best.text)[-10:]
+            return [Block(best.url, f"You can reach Dupaco at {digits[:3]}-{digits[3:6]}-{digits[6:]}.",
+                          context=best.context, page_date=best.page_date)]
+        return [best]
     return [max(found, key=lambda sb: sb[0])[1]]
 
 
 # Wordings that ask for a rate or for opening hours without saying so.
 _PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
-_OPENING = re.compile(r"\bwhat time\b|\bwhen (?:is|are)\b[^?]*\bopen\b|\bopen and close\b|\bopening\b|\bclosing time\b", re.I)
 
 
 def with_implied_words(text: str, query: list[str]) -> list[str]:
     """Add the word a wording implies: "what does it pay?" asks for a rate, "when is it open?" for hours."""
     extra = (["rate"] if _PAYS.search(text) and not MONEY_WORDS.intersection(query) else [])
-    extra += (["hour"] if _OPENING.search(text) and "hour" not in query else [])
+    extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
     return query + extra
 
 
@@ -213,7 +220,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
     text = clean(question)
     query = with_implied_words(text, content_tokens(text))
-    if compares_hours(question):
+    if asks_schedules(question):
         schedules = distinct_schedules(index, question)
         if schedules:
             return list({block.text: block for block in schedules}.values())
@@ -257,7 +264,7 @@ def affirmative_factor(question: str, block: Block) -> float:
     return AFFIRMATIVE_FACTOR if _YES_NO_QUESTION.search(question) and _AFFIRMATIVE.search(block.text) else 1.0
 
 
-ACTION_WORDS = frozenset({"join", "apply", "open", "enroll", "register", "signup"})
+ACTION_WORDS = frozenset({"join", "apply", "open", "enroll", "register", "signup", "application"})
 HOST_WORD_WEIGHT = 3
 
 

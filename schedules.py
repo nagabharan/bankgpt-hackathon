@@ -14,18 +14,34 @@ from textnorm import clean, content_tokens
 
 CLOCK = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m|\bnoon\b", re.I)
 _COMPARES = re.compile(r"\b(?:same|differ\w*|vary|varies|each|every|all)\b", re.I)
-_NOT_TOPIC = frozenset("hour same differ different vary each every all dupaco branch keep".split())
+_NOT_TOPIC = frozenset("hour same differ different vary each every all dupaco branch keep open close time".split())
+DEFAULT_TOPIC = "lobby"  # with no kind named, the branch lobby hours
 MAX_SCHEDULES = 3
 MAX_LINES = 8
 
 
-def compares_hours(question: str) -> bool:
-    return bool(_COMPARES.search(question)) and "hour" in content_tokens(clean(question))
+# Wordings that ask for opening hours without the word "hours".
+OPENING = re.compile(r"\bwhat time\b|\bwhen (?:is|are)\b[^?]*\bopen\b|\bopen and close\b|\bopening\b|\bclosing time\b", re.I)
+_CAPITALISED = re.compile(r"\b[A-Z][\w'-]*")
+
+
+def _names_a_place(question: str) -> bool:
+    """A capitalised word after the first that is not Dupaco ("Galena", "Hy-Vee"): hours of one place."""
+    return any(m.start() > 0 and m.group(0).lower() != "dupaco" for m in _CAPITALISED.finditer(question))
+
+
+def asks_hours(question: str) -> bool:
+    return "hour" in content_tokens(clean(question)) or bool(OPENING.search(question))
+
+
+def asks_schedules(question: str) -> bool:
+    """Opening hours of no particular place, or a comparison between places: show the schedules found."""
+    return asks_hours(question) and (bool(_COMPARES.search(question)) or not _names_a_place(question))
 
 
 def distinct_schedules(index: Index, question: str) -> list[Block]:
     """The clock-time lines of up to three distinct page schedules, most common first."""
-    topic = [t for t in content_tokens(clean(question)) if t not in _NOT_TOPIC]
+    topic = [t for t in content_tokens(clean(question)) if t not in _NOT_TOPIC] or [DEFAULT_TOPIC]
     by_page: dict[str, list[Block]] = defaultdict(list)
     for doc_id in sorted(index.showing("clock", lambda text: bool(CLOCK.search(text)))):
         block = index.blocks[doc_id]

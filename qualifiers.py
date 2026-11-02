@@ -17,7 +17,8 @@ _TERM = re.compile(r"(?<![\d.])\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b(?!\s*ol
 YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b(?!-\d)")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 # Words that name a different tier of the same product; the plain tier is the default.
-TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief"})
+TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief", "refinance"})
+_TIER_SYNONYMS = {"refi": "refinance", "refinancing": "refinance", "refinanced": "refinance"}
 EXCEPTIONAL_TIERS = frozenset({"relief"})  # one-off programs: never part of "the rates"
 EXCEPTIONAL_TIER_FACTOR = 0.2
 
@@ -63,6 +64,7 @@ def year_spans_in(text: str) -> list[tuple[int, int]]:
 
 
 _MONTH_NAME = re.compile(r"\b(January|February|March|April|June|July|August|September|October|November|December)\b", re.I)
+_ASSERTED_NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)(?=%)|\b(\d{6,})\b")
 _MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
 # Amount tiers: "$10000 - $24999.99", "$25000+", "$300000 or less".
 _AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")
@@ -80,7 +82,8 @@ def amount_bands_in(text: str) -> list[tuple[float, float]]:
 
 
 def tier_words_in(text: str) -> frozenset[str]:
-    return frozenset(w for w in re.findall(r"[a-z]+", text.lower()) if w in TIER_WORDS)
+    words = (_TIER_SYNONYMS.get(w, w) for w in re.findall(r"[a-z]+", text.lower()))
+    return frozenset(w for w in words if w in TIER_WORDS)
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ def parse_question(text: str) -> QuestionInfo:
     years = tuple(sorted({int(y) for y in _YEAR.findall(text) if not any(y in s for s in spans)}))
     consumed.update(str(y) for y in years)
     consumed.update(m.lower() for m in _MONTH_NAME.findall(text))  # a month is a date qualifier, not a topic word
+    consumed.update(n for pair in _ASSERTED_NUMBER.findall(text) for n in pair if n)  # a stated percent or long number is a claim
     raw_amounts = _MONEY_AMOUNT.findall(text)
     consumed.update(raw_amounts)
     amounts = tuple(float(a) for a in raw_amounts)
