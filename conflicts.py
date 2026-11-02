@@ -170,7 +170,7 @@ def _dated_conflicts(view: SnapshotView) -> list[Conflict]:
         conflicts.append(Conflict(
             topic=f"{label} {_DATED_TOPIC_WORDS.get(label, '')}".strip(),
             values=[f.value for f in ordered],
-            sources=[Source(f.url, view.snapshot_id, f"{f.date}: {f.value}") for f in ordered],
+            sources=[Source(f.url, view.snapshot_id, f"{f.date or 'undated'}: {f.value}") for f in ordered],
             resolution=ordered[-1].value,
             reason=f"the latest-dated page ({ordered[-1].date}) says {ordered[-1].value}",
         ))

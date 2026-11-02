@@ -82,11 +82,13 @@ def sentence_for(fact: DatedFact) -> str:
 
 
 def dated_facts(url: str, markdown: str) -> list[DatedFact]:
+    """Facts with the page's dateline; a page with no dateline states only a branch count, which
+    counts as the oldest statement (any dated release supersedes it)."""
     published = dateline(markdown)
-    if not published:
-        return []
     facts = [DatedFact("branch count", f"{n} branch office locations", published, url)
              for n in sorted(set(_BRANCH_COUNT.findall(markdown)))]
+    if not published:
+        return facts
     facts += [DatedFact(f"{org.lower()} recognition", ordinal.lower(), published, url)
               for ordinal, org in sorted(set(_ORDINAL_RECOGNITION.findall(markdown)))]
     return facts

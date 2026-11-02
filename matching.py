@@ -48,6 +48,7 @@ LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type
 # Plural nouns that do not mean "several items" ("savings" is a product name).
 PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
+_EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
 _HOW_MUCH = re.compile(r"\bhow much\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
@@ -58,7 +59,10 @@ _RATE_TERM = r"(?:rate|apr|apy|interest|yield|dividend)"
 _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{_PERCENT}\W+(?:\w+\W+){{0,6}}?{_RATE_TERM}", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
 # one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
-VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "hour": _CLOCK_TIME}
+# A price sits next to a price word; an address has a number or an @ in it.
+_PRICE_SHAPE = re.compile(rf"\b(?:price|cost|fee|charge)s?\b\W+(?:\w+\W+){{0,8}}?(?:{MONEY_MARK.pattern})|(?:{MONEY_MARK.pattern})\W*(?:\w+\W+){{0,8}}?\b(?:price|cost|fee|charge)", re.I)
+_ADDRESS_SHAPE = re.compile(r"\b\d{5}\b|@|\bP\.?\s?O\.? Box\b|\b(?:St|Ave|Rd|Blvd|Hwy|Pkwy)\b|\b(?:Street|Avenue|Road|Boulevard|Highway|Drive)\b", re.I)
+VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "price": _PRICE_SHAPE, "hour": _CLOCK_TIME, "address": _ADDRESS_SHAPE}
 
 
 @lru_cache(maxsize=1 << 15)  # the same candidate blocks and page contexts recur across questions
@@ -161,6 +165,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     required = [t for t in q.query if t not in skipped]
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
+    existence = bool(_EXISTENCE.search(q.raw))
+    topic_required = [t for t in required if t != "dupaco"]
     scored = []
     for score, doc_id in index.search(with_aliases(index, q.query), CANDIDATES, rows_only):
         block = index.blocks[doc_id]
@@ -171,6 +177,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             continue
         if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
+        if existence and (coverage(index, topic_required, block) < 1.0):
+            continue  # "does Dupaco have X": a block that lacks part of X does not show Dupaco has it
         if _HOW_MUCH.search(q.raw) and not _MONEY_OR_PERCENT.search(block.text):
             continue  # "how much" asks for an amount
         scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)

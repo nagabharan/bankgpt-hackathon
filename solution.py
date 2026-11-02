@@ -96,6 +96,9 @@ class KnowledgeBase:
         blocks = select_blocks(view.index, question) if view else []
         if not blocks:
             return Answer(text=NOT_LISTED, confident=False)
+        future = [y for y in calendar_years if y > int(newest[:4])]
+        if future and not any(str(y) in block.text for y in future for block in blocks):
+            return Answer(text=NOT_LISTED, confident=False)  # a year after the newest crawl cannot be on the site
         if blocks[0].expired:  # the only match is an ended offer: do not present its terms as a live deal
             return Answer(text=OFFER_ENDED, confident=False)
         lines = [block.text for block in blocks] + duration_notes(view.index, blocks, question)
