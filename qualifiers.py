@@ -121,6 +121,25 @@ class QuestionInfo:
     calendar_years: tuple[int, ...] = ()  # years the question is about in time ("in 2023"), not model years
     excluded_tiers: frozenset[str] = frozenset()  # tiers the question rules out ("regular, not jumbo")
 
+    def confirmations(self, block: Block, tiers: bool = True) -> int:
+        """How many of the qualifiers the question gave (term, model year, amount, tier) this row states
+        and satisfies: a row that names the asked term, year bracket and balance tier is the asked row
+        even when the question's other words differ from the page's."""
+        if not block.is_row:
+            return 0
+        found = 0
+        if self.terms and self.terms & terms_in(block.text):
+            found += 1
+        if self.years and any(lo <= y <= hi for y in self.years for lo, hi in year_spans_in(block.text)):
+            found += 1
+        if self.amounts:
+            bands = amount_bands_in(block.text)
+            if bands and all(any(lo <= a <= hi for lo, hi in bands) for a in self.amounts):
+                found += 1
+        if tiers and self.tiers and self.tiers <= tier_words_in(block.text):
+            found += 1
+        return found
+
     def fit(self, block: Block, ignore_tiers: bool = False) -> float:
         """0 rules the block out; otherwise a factor to scale its score by.
 
@@ -156,7 +175,7 @@ class QuestionInfo:
 
 
 _YEAR_NUMBER = r"(?:19|20)\d{2}"
-_VEHICLE_NOUN = r"(?:model(?:[\s-]year)?|cars?|vehicles?|trucks?|suvs?|vans?|motorcycles?|bikes?|boats?|rvs?|autos?|automobiles?)"
+_VEHICLE_NOUN = r"(?:model(?:[\s-]year)?|cars?|vehicles?|trucks?|suvs?|vans?|motorcycles?|bikes?|boats?|rvs?|autos?|automobiles?|jet\s+skis?|atvs?|snowmobiles?|campers?|motorhomes?|pontoons?)"
 _MODEL_YEAR_CONTEXT = re.compile(
     rf"\bmodel[\s-]year\s+(?P<a>{_YEAR_NUMBER})\b|\b(?P<b>{_YEAR_NUMBER})\s+(?:\w+\s+)?{_VEHICLE_NOUN}\b", re.I)
 _CALENDAR_CONTEXT = re.compile(rf"\b(?:in|during|as of|since|by|of)\s+(?P<c>{_YEAR_NUMBER})\b", re.I)
@@ -196,4 +215,5 @@ def parse_question(text: str) -> QuestionInfo:
         consumed.update({"up", "less", "more", "below", "above"})
     excluded = frozenset(w for m in _NEGATED_TIER.finditer(text) for w in tier_words_in(m.group("tier")))
     consumed.update(excluded)
+    consumed.update(m.group(0).split()[0].split("-")[0].lower() for m in _NEGATED_TIER.finditer(text))  # "non jumbo": the negator is no topic word
     return QuestionInfo(terms_in(text), years, tier_words_in(text) - excluded, frozenset(consumed), amounts, calendar_years, excluded)

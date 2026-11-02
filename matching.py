@@ -23,6 +23,9 @@ NEAR_TIE = 0.9  # candidates within this share of the best score compete on fres
 HOURS_TIE = 0.6
 LIST_TIE = 0.5
 MAX_BLOCKS = 6
+CONFIRMED_DIMENSIONS = 2  # qualifiers a row must satisfy to count as the asked row
+CONFIRMED_FACTOR = 1.6  # per satisfied qualifier
+CONFIRMED_COVERAGE = 0.2  # topic-word coverage still required of such a row
 EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
@@ -131,14 +134,30 @@ def coverage(index: Index, required: list[str], block: Block) -> float:
     return covered / total if total else 0.0
 
 
-def has_anchor(index: Index, required: list[str], block: Block) -> bool:
-    """The question's rarest topic word (the thing it names) must itself appear in the block;
-    otherwise a block about something else can pass on the common words alone."""
+def anchor_word(index: Index, required: list[str]) -> str:
+    """The question's rarest topic word (the thing it names), or ''."""
     words = [t for t in required if not any(c.isdigit() for c in t) and t not in FRAMING_WORDS]  # amounts/terms are matched by qualifiers
-    if not words:
-        return True
-    anchor = max(sorted(set(words)), key=index.idf)
-    return is_present(index, anchor, block)
+    return max(sorted(set(words)), key=index.idf) if words else ""
+
+
+def _unasked_tiers(q: Question, required: list[str], block: Block) -> frozenset[str]:
+    """Tier words the row carries that the question does not ask for (an IRA's Roth/Traditional rows are the
+    IRA itself when the question names the IRA)."""
+    unasked = tier_words_in(block.text) - q.info.tiers
+    return unasked - {"roth", "traditional"} if "ira" in required else unasked
+
+
+def _names_product(required: list[str], block: Block) -> bool:
+    """The question uses two or more of the words that name the row's product ("share savings")."""
+    named = set(content_tokens(f"{block.caption} {block.label}"))
+    return len(named & set(required)) >= 2
+
+
+def has_anchor(index: Index, required: list[str], block: Block) -> bool:
+    """The anchor word must itself appear in the block; otherwise a block about something else
+    can pass on the common words alone."""
+    anchor = anchor_word(index, required)
+    return not anchor or is_present(index, anchor, block)
 
 
 def aliases_of(index: Index, token: str) -> tuple[str, ...]:
@@ -363,6 +382,7 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
 
     hits = index.search(with_aliases(index, list(q.names) or q.query), CANDIDATES, rows_only)
     required = list(q.names) if q.names else _without_framing_words(index, required, hits)  # a named page: the name decides
+    anchor = anchor_word(index, required)
     entities = _entities(index, q.raw)
     place_names = _lowercase_entities(index, q.raw, entities)
     wants_phone = {"phone", "number"} <= set(q.query) or "telephone" in q.query
@@ -376,7 +396,16 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
         factor = q.info.fit(block, ignore_tiers=q.several)
         if q.asks_money and page_type(block.url) == "calculator":
             continue  # a calculator's example rows are not the credit union's rates
-        if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
+        confirmed = q.info.confirmations(block)
+        if confirmed and (anchor and is_present(index, anchor, block) or q.info.confirmations(block, tiers=False) and _names_product(required, block)):
+            confirmed += 1  # the row is also about the product the question names
+        if confirmed >= CONFIRMED_DIMENSIONS and _unasked_tiers(q, required, block):
+            confirmed = 0  # a row of another tier (an IRA's special for a certificate question) does not stand in for the asked one
+        if confirmed >= CONFIRMED_DIMENSIONS:  # the row states the asked term/year/amount/tier: the question's other words may differ from the page's
+            factor *= CONFIRMED_FACTOR ** confirmed
+            if not factor or coverage(index, required, block) < CONFIRMED_COVERAGE:
+                continue
+        elif not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
             continue
         if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
@@ -493,7 +522,7 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
 _PAYS = re.compile(r"\b(?:how much|what|whats)\b[^?]*\b(?:pay|pays|paying|earn|earns|earning|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
 _PAY_VERBS = frozenset({"pay", "paying", "earn", "earning"})
 _NOWADAYS = re.compile(r"\b(?:these|those) days\b", re.I)
-_I_PAY = re.compile(r"\b(?:i|we) (?:have to |need to |will |would )?pay\b|\bpay(?:ing)? (?:to|for)\b", re.I)  # what the member pays is a cost, not a rate
+_I_PAY = re.compile(r"\b(?:i|we) (?:have to |need to |will |would )?pay\b|\bpay(?:ing)? to\b|\b(?:do|will|would) (?:i|we|you) pay(?:ing)? for\b", re.I)  # what the member pays is a cost, not a rate; "what does the IRA pay for $8,000" is a rate
 _OFFER_WORDS = re.compile(r"\b(?:cash ?back|promo\w*|bonus|offers?|codes?|rewards?|referral|refer\w*)\b", re.I)  # earning an offer is not a rate
 _STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
 

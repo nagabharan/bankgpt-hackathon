@@ -23,7 +23,7 @@ CURRENCY_SYMBOLS = "$€£¥₹₩₽₺₫₪₱฿"
 CURRENCY_CODES = ("USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "INR", "MXN", "CNY")
 # A currency symbol or ISO code: the mark of a money amount (the % sign marks a rate).
 MONEY_MARK = re.compile(f"[{re.escape(CURRENCY_SYMBOLS)}]|\\b(?:{'|'.join(CURRENCY_CODES)})\\b")
-_K_AMOUNT = re.compile(r"(?=[$\d])\$?\b(\d+(?:\.\d+)?)\s?[kK]\b")
+_K_AMOUNT = re.compile(r"(?=[$\d])\$?\b(?!401\s?[kK]\b)(\d+(?:\.\d+)?)\s?[kK]\b")  # "401k" is a retirement plan
 _DOLLARS_WORD = re.compile(r"\b(\d+(?:\.\d+)?)\s+dollars?\b", re.I)
 _SYMBOL_SPACE = re.compile(f"([{re.escape(CURRENCY_SYMBOLS)}])\\s+(?=\\d)")  # "€ 591.61" -> "€591.61"
 # A footnote digit after a grouped amount: "$25,0002" is "$25,000" plus footnote 2.
@@ -107,7 +107,7 @@ def _dollars(match: re.Match) -> str:
     return f"{match.group(1)} ${digits}"
 
 
-_GRAND = re.compile(r"\$?\b(\d+(?:\.\d+)?)\s*(?:grand|k)\b", re.I)  # "35 grand", "5k"
+_GRAND = re.compile(r"\$?\b(?!401\s?k\b)(\d+(?:\.\d+)?)\s*(?:grand|k)\b", re.I)  # "35 grand", "5k"
 # "$5000 to $25000" / "5000-25000 balance": the tier that starts at the lower amount answers it.
 _AMOUNT_RANGE = re.compile(r"\$(\d+(?:\.\d+)?)\s*(?:to|-|and|through|thru)\s*\$?\d+(?:\.\d+)?")
 _YEAR_VEHICLE = re.compile(r"\b((?:19|20)\d\d)\s+(?:model\s+)?(?=(?:car|auto|vehicle)\b)", re.I)
@@ -121,6 +121,7 @@ _LEADS_MONTH = re.compile(r"(?:\b(?:in|since|from|to|and|between|of|during|until
 
 
 _DAY_AFTER = re.compile(r"\s*(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\b(?!\s*-?\s*(?:months?|mos?|years?|yrs?|%))")  # "apr 27", not "apr 60 months"
+_LEADS_DATE_ONLY = re.compile(r"\b(?:in|since|from|during|of|by|after|before|until|through|between|on)\s+(?:the\s+)?(?:(?:early|mid|late|end of|start of|beginning of)\s+)?$", re.I)
 
 
 def _month_names(text: str) -> str:
@@ -132,6 +133,8 @@ def _month_names(text: str) -> str:
         after = text[match.end():match.end() + 6]
         if word == "may" and not (_LEADS_MONTH.search(text[:match.start()]) or _DAY_AFTER.match(after)):
             return match.group(0)
+        if word == "apr" and not (_LEADS_DATE_ONLY.search(text[:match.start()]) or _DAY_AFTER.match(after)):
+            return match.group(0)  # "rate and apr" is the annual percentage rate, not April
         if word != "may" and len(match.group(0).rstrip(".")) < 4 and not (_LEADS_MONTH.search(text[:match.start()]) or _DAY_AFTER.match(after)):
             return match.group(0)  # "mar", "jan", "dec" in running text
         return name
