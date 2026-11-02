@@ -148,7 +148,14 @@ def aliases_of(index: Index, token: str) -> tuple[str, ...]:
 
 def _parts_of(index: Index, token: str) -> tuple[str, ...]:
     """The rarer half of a run-together name the site spells as two words ("homeready" -> "ready",
-    "hyvee" -> "vee" when the site writes "Hy-Vee")."""
+    "hyvee" -> "vee" when the site writes "Hy-Vee"). Found once per word: it scans the whole site."""
+    found = index.cached("parts_of", dict)
+    if token not in found:
+        found[token] = _split_name(index, token)
+    return found[token]
+
+
+def _split_name(index: Index, token: str) -> tuple[str, ...]:
     if len(token) < 5 or not token.isalpha() or index.df(token) > 3:
         return ()
     halves = [(token[:i], token[i:]) for i in range(2, len(token) - 1)]
