@@ -27,7 +27,6 @@ from views import SnapshotView, build_view
 NOT_LISTED = "That isn't listed on our website; please contact us."
 OFFER_ENDED = "That offer is no longer available."
 
-
 MAX_SOURCES = 5
 
 
@@ -79,7 +78,7 @@ class KnowledgeBase:
             question = stripped
         else:
             written_date = None
-        view = self._view_for(iso_date(as_of) or written_date)
+        view = self._view_for(day or written_date)
         calendar_years = parse_question(clean(question)).calendar_years
         cutoff = f"{max(calendar_years)}-12-31" if calendar_years else ""
         if (calendar_years and self.views and max(calendar_years) < int(self.views[0].taken_on[:4])
@@ -88,8 +87,9 @@ class KnowledgeBase:
         fact = answer_from_facts(question, view.dated_facts, cutoff) if view else None
         if fact is not None:
             return Answer(text=sentence_for(fact), sources=[Source(fact.url, view.snapshot_id, fact.value)])
-        if view and asks_where_online(content_tokens(clean(question))):
-            link = best_link(view.index, content_tokens(clean(question)))
+        query = content_tokens(clean(question))
+        if view and asks_where_online(query):
+            link = best_link(view.index, query)
             if link:
                 return Answer(text=f"You can do that online here: {link}",
                               sources=[Source(link, view.snapshot_id, link)])

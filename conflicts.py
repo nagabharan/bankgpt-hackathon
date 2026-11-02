@@ -16,12 +16,10 @@ from blocks import Block
 from contract import Conflict, Source
 from pressfacts import DatedFact
 from qualifiers import YEAR_SPAN, caption_words, terms_in, year_spans_in
-from segments import authority, page_type
+from segments import authority, is_article
 from views import SnapshotView
 
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_AMOUNT_BAND = re.compile(r"\$\d+(?:\.\d+)?(?:\s*-\s*\$\d+(?:\.\d+)?)?\+?(?:\s+or less)?")
-_SPACES = re.compile(r"[\s|]+")
 # "6-month certificate APY: 3.50%" -> term, unit, product words, kind, value.
 _PROSE_FACT = re.compile(r"\b(\d{1,3})[- ]?(month|year)s?\s+((?:[a-z]+\s+){0,3}?)(apy|apr|rate)\b[^0-9%]{0,12}(\d+(?:\.\d+)?)%", re.I)
 _ENDED = re.compile(r"\b(?:ended|expired)\b", re.I)
@@ -58,11 +56,6 @@ def _aligned_label(row: Block, ranks: dict[tuple[str, str], list[int]]) -> str:
     return label
 
 
-def _term_signature(label: str) -> str:
-    """The label without amount bands or tier ranks: what is left names the term/product row."""
-    return _SPACES.sub(" ", _AMOUNT_BAND.sub("", re.sub(r" #tier\d+", "", label))).strip()
-
-
 def _row_facts(blocks: list[Block]) -> list[_Fact]:
     rows = [b for b in blocks if b.is_row and b.figures]
     ranks = _tier_ranks(rows)
@@ -73,7 +66,7 @@ def _row_facts(blocks: list[Block]) -> list[_Fact]:
 def _prose_facts(blocks: list[Block]) -> list[_Fact]:
     facts = []
     for block in blocks:
-        if block.is_row or page_type(block.url) in ("blog", "news"):
+        if block.is_row or is_article(block.url):
             continue  # a blog or press release is not a product claim; dated press facts have their own path
         for number, unit, words, kind, value in _PROSE_FACT.findall(block.text):
             facts.append(_Fact(block, float(value), kind.lower(), f"{number}-{unit.lower()}",
@@ -132,7 +125,7 @@ def _topic(pairs: list[tuple[_Fact, _Fact]]) -> str:
     terms = sorted({m for a, b in pairs for f in (a, b) for m in terms_in(f.block.label + " " + f.label)})
     words = [f"{m}-month" for m in terms] + [f"{m // 12}-year" for m in terms if m >= 24 and m % 12 == 0]
     extra = [alias for key, alias in _TOPIC_ALIASES.items() if key in caption.lower()]
-    return " ".join([caption, *extra, *words, "rate"]).strip()  # a gold topic keyword may be 'rate'/'apr'/'apy' 
+    return " ".join([caption, *extra, *words, "rate"]).strip()  # a gold topic keyword may be 'rate'/'apr'/'apy'
 
 
 def _conflict(key: tuple[str, str], pairs: list[tuple[_Fact, _Fact]], snapshot_id: str) -> Conflict:

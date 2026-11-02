@@ -13,6 +13,8 @@ _DASHES = re.compile(r"[‐-―−]")  # hyphen/en/em/minus variants
 # Grouped integers: Western "1,234,567" and Indian "12,34,567" (final group is always 3 digits).
 _GROUPED_NUMBER = re.compile(r"(?<![\d,])(?:\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})\b")
 
+MONTHS = "January February March April May June July August September October November December".split()
+
 CURRENCY_SYMBOLS = "$€£¥₹₩₽₺₫₪₱฿"
 CURRENCY_CODES = ("USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "INR", "MXN", "CNY")
 # A currency symbol or ISO code: the mark of a money amount (the % sign marks a rate).

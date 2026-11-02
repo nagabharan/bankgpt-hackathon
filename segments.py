@@ -25,7 +25,7 @@ def page_type(url: str) -> str:
         return "document"
     if first == "newsroom":
         return "news"
-    if first == "learn" or first == "resources" or _DATE_SLUG.match(path) or path.startswith("/business/resources"):
+    if first in ("learn", "resources") or _DATE_SLUG.match(path) or path.startswith("/business/resources"):
         return "blog"
     if "calculator" in first:
         return "calculator"

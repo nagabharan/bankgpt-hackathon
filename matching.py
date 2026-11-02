@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from typing import NamedTuple
 
 from bm25 import Index
 from blocks import Block
@@ -34,24 +35,24 @@ ALIASES = {
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
+ALIAS_NO_SEARCH = frozenset({"share"})  # satisfies a coverage check but must not pull in other products
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 # Words that ask for a link or for every item, not topics.
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
-PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving"})  # "savings" is a product name  # plural nouns that do not mean "several items"
+# Plural nouns that do not mean "several items" ("savings" is a product name).
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
-# A question word asks for a value of this shape; a block without one cannot answer it, and
-# one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
-# Blog articles and press releases (segments.is_article) discuss rates in general or years ago; they do not
-# state this credit union's current rate, so a rate/fee question is not answered from them.
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
 # A percent within a few words of a rate word, either order: "APY: 3.50%", "4.25% introductory annual percentage rate".
 _PERCENT = r"\d+(?:\.\d+)?%"
 _RATE_TERM = r"(?:rate|apr|apy|interest|yield|dividend)"
 _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{_PERCENT}\W+(?:\w+\W+){{0,6}}?{_RATE_TERM}", re.I)
+# A question word asks for a value of this shape; a block without one cannot answer it, and
+# one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
 VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "hour": _CLOCK_TIME}
 
 
@@ -78,9 +79,6 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
     anchor = max(sorted(set(words)), key=index.idf)
     present = block_words(block)
     return anchor in present or bool(present.intersection(ALIASES.get(anchor, ())))
-
-
-ALIAS_NO_SEARCH = frozenset({"share"})  # satisfies a coverage check but must not pull in other products
 
 
 def with_aliases(query: list[str]) -> list[str]:
@@ -121,44 +119,63 @@ def wants_list(text: str, query: list[str]) -> bool:
     return bool(LIST_WORDS.intersection(query)) or bool(plural_nouns(text) - PLURAL_EXEMPT)
 
 
-def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: bool, rows_only: bool,
-                intent: str, question: str) -> list[tuple[float, int]]:
+class Question(NamedTuple):
+    """What is worked out about a question once, for every step that ranks blocks."""
+    raw: str  # as asked: the yes/no pattern reads the original wording
+    text: str  # cleaned
+    query: list[str]  # content tokens plus implied words
+    info: QuestionInfo
+    intent: str
+    asks_money: bool  # names a rate, fee or price
+    several: bool  # wants a list of rows
+
+
+def _question(question: str) -> Question:
+    text = clean(question)
+    query = with_implied_words(text, content_tokens(text))
+    asks_money = bool(MONEY_WORDS.intersection(query))
+    return Question(question, text, query, parse_question(text), intent_of(question, asks_money), asks_money,
+                    wants_list(text, query))
+
+
+def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float, int]]:
     """(score, doc_id) for the searched blocks that answer the question, best first."""
-    wants_link = bool(LINK_WORDS.intersection(query))
-    skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
-    required = [t for t in query if t not in skipped]
+    wants_link = bool(LINK_WORDS.intersection(q.query))
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = [t for t in q.query if t not in skipped]
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
     scored = []
-    for score, doc_id in index.search(with_aliases(query), CANDIDATES, rows_only):
+    for score, doc_id in index.search(with_aliases(q.query), CANDIDATES, rows_only):
         block = index.blocks[doc_id]
-        factor = info.fit(block, ignore_tiers=several)
-        if MONEY_WORDS.intersection(query) and page_type(block.url) == "calculator":
+        factor = q.info.fit(block, ignore_tiers=q.several)
+        if q.asks_money and page_type(block.url) == "calculator":
             continue  # a calculator's example rows are not the credit union's rates
         if not factor or coverage(index, required, block) < MIN_COVERAGE or not has_anchor(index, required, block):
             continue
-        if not (block.links if wants_link else has_asked_value(query, block)):
+        if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
-        scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
-                       * affirmative_factor(question, block) * url_match_factor(topic_words, block.url)
+        scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
+                       * affirmative_factor(q.raw, block) * url_match_factor(topic_words, block.url)
                        * (EXPIRED_FACTOR if block.expired else 1.0), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
 
-def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool,
-                      intent: str, question: str) -> list[tuple[float, int]]:
+def _score_candidates(index: Index, q: Question) -> list[tuple[float, int]]:
     """A question about a rate, fee or price is answered by a table row when one qualifies;
     otherwise (or for hours, policies) by any block, which may state the rate in prose."""
-    if not MONEY_WORDS.intersection(query):
-        return _drop_superseded(index, _qualifying(index, info, query, several, False, intent, question))
-    rows = _qualifying(index, info, query, several, True, intent, question)
+    if not q.asks_money:
+        return _drop_superseded(index, _qualifying(index, q, rows_only=False))
+    rows = _qualifying(index, q, rows_only=True)
     if rows:
         return _drop_superseded(index, rows)
-    prose = _qualifying(index, info, query, several, False, intent, question)  # a rate stated in a sentence
+    prose = _qualifying(index, q, rows_only=False)  # a rate stated in a sentence
+    # Blog articles and press releases discuss rates in general or years ago; they do not state this
+    # credit union's current rate.
     prose = [(s, d) for s, d in prose if not is_article(index.blocks[d].url)]
-    if info.years:  # a rate for a model year must come from text that names a range covering it
-        prose = [(s, d) for s, d in prose if any(lo <= y <= hi for y in info.years
+    if q.info.years:  # a rate for a model year must come from text that names a range covering it
+        prose = [(s, d) for s, d in prose if any(lo <= y <= hi for y in q.info.years
                                                  for lo, hi in year_spans_in(index.blocks[d].text))]
     return prose
 
@@ -181,17 +198,17 @@ EVIDENCE_CANDIDATES = 1000
 EVIDENCE_POOL = 40  # passing candidates compared when picking the best
 
 
-def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str], intent: str) -> list[Block]:
+def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
     """The best block that shows the evidence this kind of question needs, else none."""
-    skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, kind.filler)
-    required = [t for t in query if t not in skipped]
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, kind.filler)
+    required = [t for t in q.query if t not in skipped]
     found = []
-    for score, doc_id in index.search(with_aliases(query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
+    for score, doc_id in index.search(with_aliases(q.query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
         block = index.blocks[doc_id]
-        if (kind.shows(block.text) and info.fit(block) and (not required or coverage(index, required, block) >= kind.min_coverage)
+        if (kind.shows(block.text) and q.info.fit(block) and (not required or coverage(index, required, block) >= kind.min_coverage)
                 and has_anchor(index, required, block)
                 and not (kind.skip_articles and is_article(block.url))):
-            found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
+            found.append((score * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
                           * (coverage(index, required, block) if required else 1.0)
                           * (EXPIRED_FACTOR if block.expired else 1.0), block))  # the fuller topic match wins
             if len(found) == EVIDENCE_POOL:
@@ -221,38 +238,33 @@ def with_implied_words(text: str, query: list[str]) -> list[str]:
 
 def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
-    text = clean(question)
-    query = with_implied_words(text, content_tokens(text))
     if asks_schedules(question):
         schedules = distinct_schedules(index, question)
         if schedules:
             return list({block.text: block for block in schedules}.values())
+    q = _question(question)
     kind = kind_for(question)
-    intent = intent_of(question, bool(MONEY_WORDS.intersection(query)))
-    if kind is not None and not MONEY_WORDS.intersection(query):
-        found = _by_evidence(index, kind, parse_question(text), query, intent)
+    if kind is not None and not q.asks_money:
+        found = _by_evidence(index, kind, q)
         if found:
             return found
-    several = wants_list(text, query)
-    scored = _score_candidates(index, parse_question(text), query, several, intent, question)
+    scored = _score_candidates(index, q)
     if not scored:
         return []
     top = scored[0][0]
     blocks = index.blocks
     contenders = [doc_id for score, doc_id in scored if score >= top * NEAR_TIE]
-    in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(query))  # the page named for the topic
-    info = parse_question(text)
-    fit = lambda d: round(info.fit(blocks[d], several), 1)  # the tier that was asked for before the newest one
+    in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(q.query))  # the page named for the topic
+    fit = lambda d: round(q.info.fit(blocks[d], q.several), 1)  # the tier that was asked for before the newest one
     best = blocks[max(contenders, key=lambda d: (fit(d), authority(blocks[d].url), blocks[d].freshness, in_url(d)))]  # equals: best scored first
 
-    tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
+    tie = LIST_TIE if q.several else HOURS_TIE if "hour" in q.query else NEAR_TIE
     same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]
-    if several and best.is_row:  # a list may span pages and dates (personal and business cards)
-        asks_rate = bool(MONEY_WORDS.intersection(query))
-        group = [d for d in same_kind if blocks[d].figures or not asks_rate]  # a rate list holds rows with a rate
+    if q.several and best.is_row:  # a list may span pages and dates (personal and business cards)
+        group = [d for d in same_kind if blocks[d].figures or not q.asks_money]  # a rate list holds rows with a rate
     else:
         group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].freshness == best.freshness]
-    kept = group[:MAX_LIST_BLOCKS if several else MAX_BLOCKS]  # the highest scored...
+    kept = group[:MAX_LIST_BLOCKS if q.several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
     return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
 

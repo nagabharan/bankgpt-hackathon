@@ -163,10 +163,15 @@ def _effective_after(lines: list[str], start: int) -> str:
     return ""
 
 
+def _path_segments(url: str) -> list[str]:
+    """A URL's path segments as words, query and fragment dropped: '/auto-loans/?x' -> ['auto loans']."""
+    path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
+    return [re.sub(r"[-_]+", " ", s) for s in path.split("/") if s]
+
+
 def _all_path_words(url: str) -> str:
     """Every path segment of a page URL as words: '/personal/loans/auto-loans' -> 'personal loans auto loans'."""
-    path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
-    return " ".join(re.sub(r"[-_]+", " ", s) for s in path.split("/") if s)
+    return " ".join(_path_segments(url))
 
 
 def _looks_like_code(text: str) -> bool:
@@ -176,9 +181,7 @@ def _looks_like_code(text: str) -> bool:
 
 def _path_words(url: str) -> str:
     """The last two path segments of a link as words: '.../personal/savings/certificates/?x' -> 'savings certificates'."""
-    path = url.split("?")[0].split("#")[0].split("//", 1)[-1].partition("/")[2]
-    segments = [s for s in path.split("/") if s]
-    return " ".join(re.sub(r"[-_]+", " ", s) for s in segments[-2:])
+    return " ".join(_path_segments(url)[-2:])
 
 
 class _PageParser:

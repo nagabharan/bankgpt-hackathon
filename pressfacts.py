@@ -10,9 +10,10 @@ import re
 from datetime import date
 from typing import NamedTuple
 
-_MONTHS = "January February March April May June July August September October November December".split()
+from textnorm import MONTHS
+
 # "June 18, 2024": the publication date printed near the top of a release.
-_DATELINE = re.compile(rf"\b({'|'.join(_MONTHS)})\s+(\d{{1,2}}),\s+(\d{{4}})\b")
+_DATELINE = re.compile(rf"\b({'|'.join(MONTHS)})\s+(\d{{1,2}}),\s+(\d{{4}})\b")
 # "12 branch office locations" / "12 branches" (not "1,000 branches": the lookbehind skips digits and commas).
 _BRANCH_COUNT = re.compile(r"(?<![\d,])(\d{1,3})\s+branch(?:es| office locations?)\b", re.I)
 _ORDINALS = "first second third fourth fifth sixth seventh eighth ninth tenth".split()
@@ -33,7 +34,7 @@ def dateline(text: str) -> str:
     if not match:
         return ""
     month, day, year = match.groups()
-    return date(int(year), _MONTHS.index(month) + 1, int(day)).isoformat()
+    return date(int(year), MONTHS.index(month) + 1, int(day)).isoformat()
 
 
 _HOW_MANY_BRANCHES = re.compile(r"\b(?:how many|number of|count of)\b[^?]*\bbranch", re.I)

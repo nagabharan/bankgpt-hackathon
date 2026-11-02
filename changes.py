@@ -5,24 +5,22 @@ are printed with their dates, because the question is about the difference.
 """
 from __future__ import annotations
 
-import calendar
 import re
 from typing import Optional
 
 from contract import Source
 from matching import MONEY_WORDS, select_blocks
 from pressfacts import answer_from_facts, sentence_for
-from textnorm import clean, content_tokens
+from textnorm import MONTHS, clean, content_tokens
 from views import SnapshotView
 
 _CHANGE_WORDS = re.compile(
     r"\b(?:chang(?:e|ed|es|ing)|since|versus|vs\.?|compared? (?:to|with)|increase[ds]?|decrease[ds]?|"
     r"(?:went|go|goes|gone|going) (?:up|down)|rise[sn]?|rose|dropp?(?:ed)?|fell|used to|previously|differen(?:t|ce))\b", re.I)
-_MONTHS = list(calendar.month_name)[1:]
 # "since May", "from March 2026", "in May", "vs May": the month the question compares with.
 _REFERENCE = re.compile(rf"\b(?:since|from|in|as of|during|versus|vs\.?|compared? (?:to|with))\s+"
-                        rf"(?P<month>{'|'.join(_MONTHS)})(?:\s+(?P<year>\d{{4}}))?\b")
-_MONTH_WORD = re.compile(rf"\b(?:{'|'.join(_MONTHS)})(?:\s+\d{{4}})?\b")
+                        rf"(?P<month>{'|'.join(MONTHS)})(?:\s+(?P<year>\d{{4}}))?\b")
+_MONTH_WORD = re.compile(rf"\b(?:{'|'.join(MONTHS)})(?:\s+\d{{4}})?\b")
 
 
 _HOW_MANY = re.compile(r"\b(?:how many|number of|count of)\b", re.I)
@@ -44,7 +42,7 @@ def _reference_view(views: list[SnapshotView], question: str) -> Optional[Snapsh
     season = _SEASON_REFERENCE.search(question)
     if (match or season) and older:
         year = int((match.group("year") if match else None) or views[-1].taken_on[:4])
-        month = _MONTHS.index(match.group("month")) + 1 if match else _SEASONS[season.group("season").lower()]
+        month = MONTHS.index(match.group("month")) + 1 if match else _SEASONS[season.group("season").lower()]
         start = f"{year}-{month:02d}-01"
         later = [v for v in older if v.taken_on >= start]
         return later[0] if later else older[-1]

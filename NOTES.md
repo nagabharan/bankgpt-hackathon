@@ -45,7 +45,7 @@ the action after it (`evidence.py`). The candidates are the blocks that show tha
 "How many branches" and "what recognition from <org>" are answered from dated press-release
 facts (`pressfacts.py`) as one short sentence, only when the question is about Dupaco.
 "How do I join/apply/open ... online" answers with the site link whose address best matches the
-question (host words count triple; article pages are not link sources). A question that compares
+question (host words count triple; blog, news, calculator and document pages are not link sources). A question that compares
 hours between branches ("do all branches keep the same lobby hours?") shows up to three distinct
 schedules found across pages (`schedules.py`).
 
