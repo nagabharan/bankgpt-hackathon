@@ -17,8 +17,9 @@ _TERM = re.compile(r"(?<![\d.])\b(\d{1,3})\s*-?\s*(month|mo|year|yr)s?\b(?!\s*ol
 YEAR_SPAN = re.compile(r"\b(20\d{2})\s*-\s*(\d{4}|\d{2})\b(?!-\d)")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
 # Words that name a different tier of the same product; the plain tier is the default.
-TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief", "refinance"})
-_TIER_SYNONYMS = {"refi": "refinance", "refinancing": "refinance", "refinanced": "refinance"}
+TIER_WORDS = frozenset({"jumbo", "business", "roth", "traditional", "relief", "refinance", "international", "domestic", "incoming"})
+_TIER_SYNONYMS = {"refi": "refinance", "refinancing": "refinance", "refinanced": "refinance", "outgoing": "domestic"}
+_WITHIN_US = re.compile(r"\b(?:within|in|inside) the u\.?s\.?\b|\bu\.?s\.? (?:wire|transfer)\b|\bregular u\.?s\.?\b")  # "a wire within the US" is a domestic wire
 EXCEPTIONAL_TIERS = frozenset({"relief"})  # one-off programs: never part of "the rates"
 REPLACING_TIERS = frozenset({"refinance"})  # a loan that replaces another: a rate row of it is not part of "the rates" unasked
 EXCEPTIONAL_TIER_FACTOR = 0.2
@@ -94,9 +95,16 @@ def amount_bands_in(text: str) -> list[tuple[float, float]]:
     return bands
 
 
+_BUSINESS_DAY = re.compile(r"\bbusiness (?:days?|hours?|weeks?)\b")  # a length of time, not the business tier
+
+
 def tier_words_in(text: str) -> frozenset[str]:
-    words = (_TIER_SYNONYMS.get(w, w) for w in re.findall(r"[a-z]+", text.lower()))
-    return frozenset(w for w in words if w in TIER_WORDS)
+    lowered = _BUSINESS_DAY.sub(" ", text.lower())
+    words = (_TIER_SYNONYMS.get(w, w) for w in re.findall(r"[a-z]+", lowered))
+    found = {w for w in words if w in TIER_WORDS}
+    if _WITHIN_US.search(lowered):
+        found.add("domestic")
+    return frozenset(found)
 
 
 # "not jumbo", "non-business", "instead of the Roth": the tier is ruled out, not asked for.
@@ -176,6 +184,9 @@ def parse_question(text: str) -> QuestionInfo:
     consumed.update(str(y) for y in (*years, *calendar_years))
     if years:  # the model year already says how new the vehicle is
         consumed.update(CONDITION_WORDS)
+    consumed.update(w for w in ("through", "within") if w in text.lower())  # connectives, never the topic
+    if _WITHIN_US.search(text.lower()):
+        consumed.add("us")  # "within the US" qualifies the product (a domestic wire), it is not a topic word
     consumed.update(m.lower() for m in _MONTH_NAME.findall(text))  # a month is a date qualifier, not a topic word
     consumed.update(n for pair in _ASSERTED_NUMBER.findall(text) for n in pair if n)  # a stated percent or long number is a claim
     raw_amounts = _MONEY_AMOUNT.findall(text)

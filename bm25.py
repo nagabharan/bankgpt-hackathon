@@ -46,6 +46,10 @@ class Index:
     def document_frequency(self, token: str) -> int:
         return self._text_df.get(token, 0)
 
+    def knows(self, token: str) -> bool:
+        """The word occurs somewhere on the site, in a block's text or in a page's title, URL or headings."""
+        return token in self._postings
+
     def df(self, token: str) -> int:
         return self._text_df.get(token, 0)
 

@@ -10,10 +10,10 @@ from typing import NamedTuple
 from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
-from qualifiers import QuestionInfo, fact_key, parse_question, tier_words_in, year_spans_in
+from qualifiers import TIER_WORDS, QuestionInfo, fact_key, parse_question, tier_words_in, year_spans_in
 from schedules import OPENING, asks_schedules, distinct_schedules
 from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
-from textnorm import MONEY_MARK, MONTHS, STREET_ABBREVIATIONS, clean, content_tokens, plural_nouns, stem
+from textnorm import MONEY_MARK, MONTHS, STOPWORDS, STREET_ABBREVIATIONS, clean, content_tokens, plural_nouns, stem
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
 # Share of the question's idf mass the block must cover, else it does not answer the question.
@@ -27,6 +27,7 @@ EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
 INFLECTION_MIN_IDF = 5.0  # "backed" -> "back" is another word: a common base form is not accepted
+UNASKED_OFFER_FACTOR = 0.3
 FEE_STATED_FACTOR = 1.3
 NO_AMOUNT_FACTOR = 0.4  # a block without an amount, when the question asks how much
 
@@ -39,9 +40,9 @@ ALIASES = {
     "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
     "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
     "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",), "telephone": ("phone",),
-    "send": ("transfer", "outgoing"), "sending": ("transfer", "outgoing"), "sent": ("transfer", "outgoing"), "receive": ("incoming",), "receiving": ("incoming",),
+    "send": ("transfer", "outgoing", "domestic"), "sending": ("transfer", "outgoing", "domestic"), "sent": ("transfer", "outgoing", "domestic"), "receive": ("incoming",), "receiving": ("incoming",),
     "lose": ("lost",), "losing": ("lost",), "hit": ("deposit", "paid", "posted"), "cap": ("limit", "below", "maximum"),
-    "intro": ("introductory", "introduction"), "country": ("international", "foreign"), "shut": ("close", "closing", "closure"), "turn": ("activate", "enable"), "outside": ("non", "network"), "location": ("branch",), "first": ("1st",), "1st": ("first",), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
+    "outgoing": ("domestic",), "intro": ("introductory", "introduction"), "country": ("international", "foreign"), "shut": ("close", "closing", "closure"), "turn": ("activate", "enable"), "outside": ("non", "network"), "location": ("branch",), "first": ("1st",), "1st": ("first",), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
@@ -300,6 +301,7 @@ class Question(NamedTuple):
     intent: str
     asks_money: bool  # names a rate, fee or price
     several: bool  # wants a list of rows
+    names: tuple[str, ...] = ()  # run-together names of the site the question spells as words ("make the most")
 
 
 _DATE_AS_REFERENCE = re.compile(r"\bas of (?:this |that |today'?s? |the )?date\b|\b(?:today'?s|this|that|current|effective) date\b", re.I)
@@ -351,8 +353,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     required = [t for t in q.query if t not in skipped and not (wants_amount and t == "amount")]
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
-    hits = index.search(with_aliases(index, q.query), CANDIDATES, rows_only)
-    required = _without_framing_words(index, required, hits)
+    hits = index.search(with_aliases(index, list(q.names) or q.query), CANDIDATES, rows_only)
+    required = list(q.names) if q.names else _without_framing_words(index, required, hits)  # a named page: the name decides
     entities = _entities(index, q.raw)
     place_names = _lowercase_entities(index, q.raw, entities)
     wants_phone = {"phone", "number"} <= set(q.query) or "telephone" in q.query
@@ -374,6 +376,12 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             factor *= PHONE_FACTOR  # "phone number of ...": the line that holds a number to dial
         if codes and not set(codes) <= block_words(block):
             continue
+        if q.names and not set(q.names) <= block_words(block):
+            continue
+        if q.asks_money and lacks_named_product(index, required, block):
+            continue  # "HELOC intro rate": the card's introductory rate is another product's
+        if lacks_asked_tier(q, block):
+            continue  # "business line of credit": a rate of the personal product is another product's rate
         if entities and not entities <= block_words(block):
             continue  # "Platteville": a passage about another place does not answer
         if place_names and not place_names <= block_words(block) and not place_names <= _page_words(index, block.url):
@@ -384,6 +392,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             if q.asks_money or q.intent == "membership":
                 continue  # "how much is the fee", "minimum to join" ask for an amount
             factor *= NO_AMOUNT_FACTOR  # "how much do I need to join": the passage with an amount is likelier
+        if wants_amount and _OFFER_WORDS.search(block.text) and not _OFFER_WORDS.search(q.raw):
+            factor *= UNASKED_OFFER_FACTOR  # "how much to join": the membership deposit, not the referral bonus
         if wants_fee and _PRICE_SHAPE.search(block.text):
             factor *= FEE_STATED_FACTOR  # the fee and its amount in the same breath
         scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
@@ -472,7 +482,9 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
 
 
 # Wordings that ask for a rate or for opening hours without saying so.
-_PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_PAYS = re.compile(r"\b(?:how much|what|whats)\b[^?]*\b(?:pay|pays|paying|earn|earns|earning|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_PAY_VERBS = frozenset({"pay", "paying", "earn", "earning"})
+_NOWADAYS = re.compile(r"\b(?:these|those) days\b", re.I)
 _I_PAY = re.compile(r"\b(?:i|we) (?:have to |need to |will |would )?pay\b|\bpay(?:ing)? (?:to|for)\b", re.I)  # what the member pays is a cost, not a rate
 _OFFER_WORDS = re.compile(r"\b(?:cash ?back|promo\w*|bonus|offers?|codes?|rewards?|referral|refer\w*)\b", re.I)  # earning an offer is not a rate
 _STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
@@ -488,7 +500,57 @@ def with_implied_words(text: str, query: list[str]) -> list[str]:
     pays = _PAYS.search(text) and not _OFFER_WORDS.search(text) and not _I_PAY.search(text)
     extra = (["rate"] if (pays or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) and not bonus else [])
     extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
+    if "rate" in extra and pays:  # "what is Bright Savings paying": the verb asked for the rate, it is not a topic word
+        query = [t for t in query if t not in _PAY_VERBS]
+    if _NOWADAYS.search(text):
+        query = [t for t in query if t not in ("these", "those", "day")]
     return query + extra
+
+
+def lacks_asked_tier(q: Question, block: Block) -> bool:
+    """A rate question names a product tier (business, jumbo, domestic...) that the block never mentions."""
+    return q.asks_money and bool(q.info.tiers) and not q.info.tiers & (tier_words_in(block.text) | tier_words_in(block.context))
+
+
+PRODUCT_WORD_IDF = 5.0  # as rare as a product name on the site...
+PRODUCT_WORD_DF = 20  # ...but used on enough blocks to be a real word, not a typo or a synonym the site avoids
+
+
+def lacks_named_product(index: Index, required: list[str], block: Block) -> bool:
+    """A rate question names its product by words that are specific on the site (HELOC, wire, Bright):
+    every one of them must be in the block, or the block is another product's rate."""
+    names = index.cached("product_words", lambda: frozenset(
+        t for b in index.blocks if b.is_row and (b.figures or _MONEY_OR_PERCENT.search(b.text)) and not b.url.endswith((".xls", ".xlsx"))
+        for t in content_tokens(f"{b.label} {b.caption}")))  # words of the names of priced rows
+    return any(t in names and t not in TIER_WORDS and index.idf(t) >= PRODUCT_WORD_IDF and index.df(t) >= PRODUCT_WORD_DF and not is_present(index, t, block)
+               for t in sorted(set(required)) if not any(c.isdigit() for c in t))
+
+
+_PLACE_BEFORE = re.compile(r"\b([a-z]+)(?:\s+([a-z]+))?\s+(?:branch|office|location|atm)\b")
+_NOT_PLACES = frozenset("nearest closest nearby local main downtown first other biggest largest busiest newest oldest which another walk drive".split())
+
+
+def names_unknown_place(index: Index, raw: str) -> bool:
+    """"The Omaha branch": a place word the site never uses, anywhere, means there is no such branch."""
+    for match in _PLACE_BEFORE.finditer(raw.lower()):
+        for word in match.groups():
+            if (word and len(word) >= 5 and word not in _NOT_PLACES and not word.endswith(("est", "ing", "ly", "er", "al"))
+                    and word not in STOPWORDS and not index.knows(stem(word)) and not _parts_of(index, word)):
+                return True
+    return False
+
+
+def _compound_names(index: Index, text: str) -> list[str]:
+    """Adjacent question words that the site writes as one word ("make the most" on a page named
+    makethemost): the joined word is what the page's address or title carries."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    found = []
+    for size in (3, 2):
+        for i in range(len(words) - size + 1):
+            joined = "".join(words[i:i + size])
+            if len(joined) >= 8 and index.knows(joined) and index.df(joined) == 0 and joined not in found:
+                found.append(joined)
+    return found
 
 
 def select_blocks(index: Index, question: str) -> list[Block]:
@@ -497,7 +559,12 @@ def select_blocks(index: Index, question: str) -> list[Block]:
         schedules = distinct_schedules(index, question)
         if schedules:
             return list({block.text: block for block in schedules}.values())
+    if names_unknown_place(index, question):
+        return []
     q = _question(question)
+    compounds = _compound_names(index, q.text) if _OFFER_WORDS.search(question) else []  # a named promotion; other names are just words
+    if compounds:
+        q = q._replace(query=q.query + compounds, names=tuple(compounds))
     kind = kind_for(question)
     if kind is not None and not q.asks_money:
         found = _by_evidence(index, kind, q)
@@ -622,13 +689,13 @@ def _label(text: str) -> str:
     return text.split(":")[0] if ":" in text else ""
 
 
-def _body_after(blocks: list[Block], i: int, continues: bool = True) -> list[Block]:
+def _body_after(blocks: list[Block], i: int, continues: bool = True, multipart: bool = False) -> list[Block]:
     """The paragraph right after block `i` on its page, and a short line after that (a date, a label).
     A heading that already holds a figure (an address line) only takes continuation lines under the
     same label."""
     body = []
     heading = blocks[i]
-    has_figure = any(c.isdigit() for c in heading.text)
+    has_figure = any(c.isdigit() for c in heading.text) and not (multipart and not _STREET_NUMBER.search(heading.text))  # a two-part ask needs more than the headline's figure
     if has_figure and not continues:
         return body
     for follower in blocks[i + 1:i + 1 + BODY_MAX_BLOCKS]:
@@ -674,6 +741,8 @@ def with_steps(index: Index, blocks: list[Block], question: str) -> list[Block]:
 
 
 
+_STREET_NUMBER = re.compile(r"\b\d{1,5}\s+[A-Z][A-Za-z.]+")  # "2050 JFK Rd.": an address line already is the answer
+_MULTIPART = re.compile(r"\band\s+(?:what|how|when|which|who|where)\b", re.I)  # "how much and what loan size"
 _ADDRESS_WORDS = frozenset({"address", "mailing", "location", "located", "where"})
 _PHONE_WORDS = frozenset({"phone", "call", "number", "contact", "text", "fax"})
 
@@ -684,7 +753,8 @@ def with_body(index: Index, blocks: list[Block], question: str = "") -> list[Blo
     where its body is longest, which is the article itself."""
     copies = index.cached("heading_copies", lambda: _short_blocks(index))
     asked = _question(question).query if question else []
-    continues = not question or bool(_ADDRESS_WORDS.intersection(asked))  # only an address spans several labelled lines
+    continues = not question or bool(_ADDRESS_WORDS.intersection(asked))
+    multipart = bool(_MULTIPART.search(question)) and not continues  # an address question already takes its labelled lines  # only an address spans several labelled lines
     result = []
     for block in blocks:
         if (block.is_row or len(block.text) > 100 or block.text.rstrip().endswith((".", "!", "?"))
@@ -694,7 +764,7 @@ def with_body(index: Index, blocks: list[Block], question: str = "") -> list[Blo
         best = max(copies[block.text], key=lambda i: (sum(len(b.text) for b in _body_after(index.blocks, i)), -i))
         result.append(index.blocks[best])
         asks_phone = not question or bool(_PHONE_WORDS.intersection(asked))
-        result.extend(b for b in _body_after(index.blocks, best, continues) if b not in blocks and (asks_phone or not phone_in(b.text)))
+        result.extend(b for b in _body_after(index.blocks, best, continues, multipart) if b not in blocks and (asks_phone or not phone_in(b.text)))
     return result
 
 

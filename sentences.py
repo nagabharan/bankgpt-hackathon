@@ -21,7 +21,7 @@ from bm25 import Index
 from blocks import Block
 from matching import (
     CANDIDATES, EXPIRED_FACTOR, LINK_WORDS, LIST_WORDS, MIN_COVERAGE, NEAR_TIE, RATE_WORDS, SUPERLATIVES,
-    VALUE_SHAPES, _CODE, _EXISTENCE, _entities, _question, _without_framing_words, affirmative_factor, block_words,
+    VALUE_SHAPES, _CODE, _EXISTENCE, _entities, _question, _without_framing_words, affirmative_factor, block_words, lacks_asked_tier, lacks_named_product,
     coverage, has_anchor, has_asked_value, is_present, with_aliases,
 )
 from segments import authority, is_article, page_type, segment_factor, url_match_factor
@@ -185,6 +185,8 @@ def _candidates(index: Index, question: str, shapes: list[re.Pattern]) -> list[t
         if codes and not set(codes) <= block_words(block):
             continue
         if entities and not entities <= block_words(block):
+            continue
+        if lacks_asked_tier(q, block) or (q.asks_money and lacks_named_product(index, required, block)):
             continue
         if existence and coverage(index, topic_required, block) < 1.0:
             continue
