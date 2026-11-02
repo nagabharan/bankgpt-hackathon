@@ -124,7 +124,14 @@ The approach is general-purpose, but some rules were chosen after reading the 40
 questions: the branch-count and "Nth time X recognized" press-release patterns, the evidence
 kinds (phone, eligibility, program amount, "how many"), the small alias, filler and tier-word
 lists, excluding blog and press-release pages from rate answers, and treating one-off "relief"
-programs as exceptional. No answer, number or URL from the practice set is stored in the code.
+programs as exceptional. Later rules (aliases, filler words, tier cues, model-year and term
+handling) were added after reading failures of independently written questions, never from the
+practice set. No answer, number or URL from the practice set is stored in the code.
+
+Measured on questions written from the raw pages by reviewers who had not seen the code, the
+system scores about 0.9 on the public set but roughly 0.6 on fresh questions: table lookups
+(rates, tiers, fees) are strong; prose, news and education questions, casual phrasing and
+rewordings are weaker.
 
 ## Known gaps
 - Conflicts cover rate-like numbers, branch counts (an undated page counts as the oldest
@@ -137,5 +144,11 @@ programs as exceptional. No answer, number or URL from the practice set is store
   restructured between the two, tiers that no longer match are skipped.
 - "Last year" is not resolved to a calendar year: "how many employees used Volunteer Time Off
   last year" returns the best-matching statistic, which may not be the one a reader expects.
-- One-off facts in prose are found only when the question matches an evidence kind or ordinary
-  search ranks the right passage first.
+- One-off facts in prose are found only when the question matches an evidence kind, a sentence
+  with the asked kind of value, or ordinary search ranks the right passage first; education and
+  news questions in unusual wording are often refused or answered with a nearby sentence.
+- A model year attached to a vehicle word with chatty filler, parentheticals and multi-part
+  questions can still be refused; rewordings of the same prose question do not always give the
+  same numbers.
+- Branch hours exist mostly in older press releases and are not always attributed to the named
+  branch.
