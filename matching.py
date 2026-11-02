@@ -10,7 +10,7 @@ from blocks import Block
 from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question, year_spans_in
 from schedules import compares_hours, distinct_schedules
-from segments import intent_of, page_type, segment_factor
+from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
@@ -43,9 +43,8 @@ _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 # A question word asks for a value of this shape; a block without one cannot answer it, and
 # one with it needn't repeat the word itself (hours are written "8:30 a.m.", not "hours").
-# Blog articles and press releases discuss rates in general or years ago; they do not state this
-# credit union's current rate, so a rate/fee question is not answered from them.
-ARTICLE_PATHS = ("/learn/", "/newsroom/", "/blog/")
+# Blog articles and press releases (segments.is_article) discuss rates in general or years ago; they do not
+# state this credit union's current rate, so a rate/fee question is not answered from them.
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
 # A percent within a few words of a rate word, either order: "APY: 3.50%", "4.25% introductory annual percentage rate".
@@ -124,6 +123,7 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
     wants_link = bool(LINK_WORDS.intersection(query))
     skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
     required = [t for t in query if t not in skipped]
+    topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
     scored = []
     for score, doc_id in index.search(with_aliases(query), CANDIDATES, rows_only):
@@ -136,7 +136,7 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
         scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
-                       * affirmative_factor(question, block), doc_id))
+                       * affirmative_factor(question, block) * url_match_factor(topic_words, block.url), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
@@ -151,7 +151,7 @@ def _score_candidates(index: Index, info: QuestionInfo, query: list[str], severa
     if rows:
         return _drop_superseded(index, rows)
     prose = _qualifying(index, info, query, several, False, intent, question)  # a rate stated in a sentence
-    prose = [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
+    prose = [(s, d) for s, d in prose if not is_article(index.blocks[d].url)]
     if info.years:  # a rate for a model year must come from text that names a range covering it
         prose = [(s, d) for s, d in prose if any(lo <= y <= hi for y in info.years
                                                  for lo, hi in year_spans_in(index.blocks[d].text))]
@@ -183,11 +183,11 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
     found = []
     for score, doc_id in index.search(with_aliases(query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
         block = index.blocks[doc_id]
-        if (kind.shows(block.text) and info.fit(block) and coverage(index, required, block) >= kind.min_coverage
+        if (kind.shows(block.text) and info.fit(block) and (not required or coverage(index, required, block) >= kind.min_coverage)
                 and has_anchor(index, required, block)
-                and not (kind.skip_articles and any(part in block.url for part in ARTICLE_PATHS))):
+                and not (kind.skip_articles and is_article(block.url))):
             found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
-                          * coverage(index, required, block), block))  # the fuller topic match wins
+                          * (coverage(index, required, block) if required else 1.0), block))  # the fuller topic match wins
             if len(found) == EVIDENCE_POOL:
                 break
     if not found:
@@ -233,7 +233,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     in_url = lambda d: sum(word in blocks[d].url.lower() for word in set(query))  # the page named for the topic
     info = parse_question(text)
     fit = lambda d: round(info.fit(blocks[d], several), 1)  # the tier that was asked for before the newest one
-    best = blocks[max(contenders, key=lambda d: (fit(d), blocks[d].freshness, in_url(d)))]  # equals: best scored first
+    best = blocks[max(contenders, key=lambda d: (fit(d), authority(blocks[d].url), blocks[d].freshness, in_url(d)))]  # equals: best scored first
 
     tie = LIST_TIE if several else HOURS_TIE if "hour" in query else NEAR_TIE
     same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]

@@ -19,8 +19,11 @@ document, news, blog or calculator (`segments.py`). About 80% of the site is art
 page gets a prior: a fixed one by type (rate sheet and product above news, blog and calculators)
 times a hub boost from how many other pages link to it. A question is also given an intent
 (rate, news, contact, membership, policy, general), which prefers some page types and disfavours
-others. All of these are soft factors on a block's score, except that a rate or fee question is
-never answered from a blog or press-release prose page.
+others. A question word that is also a word in a page's address ("student", "loans") gives that page
+a small boost. All of these are soft factors on a block's score, except that a rate or fee question
+is never answered from a blog or press-release prose page. Among near-equal candidates the order is
+qualifier fit, then page authority, then freshness, so a newer announcement does not outrank a product
+page on date alone.
 
 **Answering.** The snapshot is chosen from `as_of` (newest on or before that date, or the newest
 overall). BM25 returns candidate blocks, which are kept only if they cover the question's key

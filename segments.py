@@ -37,7 +37,7 @@ def page_type(url: str) -> str:
 
 
 _NEWS = re.compile(r"\b(?:recogni\w+|award\w*|ranked|ranking|clos(?:e|ed|es|ing|ure)|announc\w+|partnership|volunteer\w*)\b", re.I)
-_CONTACT = re.compile(r"\b(?:phone|call|hours?|address|located|location|lobby|drive-up|atm|branch\w*|routing)\b", re.I)
+_CONTACT = re.compile(r"\b(?:contact|phone|call|hours?|address|located|location|lobby|drive-up|atm|branch\w*|routing)\b", re.I)
 _POLICY = re.compile(r"\b(?:policy|policies|terms|rules?|overdraft|disputes?|penalt\w*|grace period|waive\w*|limits?|deadline)\b", re.I)
 _MEMBERSHIP = re.compile(r"\b(?:eligib\w*|join|become a member|membership|member)\b", re.I)
 
@@ -89,3 +89,20 @@ HUB_CAP = 1.3
 def page_prior(url: str, in_links: int) -> float:
     """Type prior times a hub prior: pages that many other pages link to are the main ones."""
     return TYPE_PRIOR[page_type(url)] * min(HUB_CAP, 1 + HUB_STEP * math.log2(1 + in_links))
+
+
+URL_WORD_FACTOR = 1.1
+URL_WORD_CAP = 1.3
+
+
+def is_article(url: str) -> bool:
+    return page_type(url) in ("blog", "news")
+
+
+def url_match_factor(words: set[str], url: str) -> float:
+    """A question word that is also a word of the page's address ("student", "loans") is a strong sign
+    the page is about it: a soft boost per word, capped."""
+    path = url.split("//", 1)[-1].partition("/")[2].split("?")[0].lower()
+    in_path = set(re.split(r"[^a-z0-9]+", path))
+    hits = sum(w in in_path or w + "s" in in_path for w in words)
+    return min(URL_WORD_CAP, URL_WORD_FACTOR ** hits)
