@@ -49,17 +49,23 @@ def _tier_ranks(rows: list[Block]) -> dict[tuple[str, str], list[int]]:
 def _aligned_label(row: Block, ranks: dict[tuple[str, str], list[int]]) -> str:
     """The row's tier label with its model-year range replaced by the range's rank on its page,
     so "2023-26" on a stale page lines up with "2024-27" on the rate sheet."""
-    label = YEAR_SPAN.sub("", row.label.lower())
+    label = " ".join(YEAR_SPAN.sub("", row.label.lower()).split())  # also folds a non-breaking space
     spans = year_spans_in(row.label)
     if spans:
         label += f" #tier{ranks[row.url, row.caption].index(spans[0][1])}"
     return label
 
 
+def _kind_of(column_kind: str, cell: str) -> str:
+    """A cell that says APR or APY itself ("5.34% APR") outranks a table header that says otherwise."""
+    said = re.search(r"\b(apr|apy)\b", cell, re.I)
+    return said.group(1).lower() if said else column_kind
+
+
 def _row_facts(blocks: list[Block]) -> list[_Fact]:
     rows = [b for b in blocks if b.is_row and b.figures]
     ranks = _tier_ranks(rows)
-    return [_Fact(row, _number(cell), kind, _aligned_label(row, ranks), caption_words(row), row.expired)
+    return [_Fact(row, _number(cell), _kind_of(kind, cell), _aligned_label(row, ranks), caption_words(row), row.expired)
             for row in rows for kind, cell in row.figures]
 
 

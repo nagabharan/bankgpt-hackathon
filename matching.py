@@ -32,7 +32,8 @@ ALIASES = {
     "mortgage": ("home",), "cd": ("certificate",), "car": ("auto",), "vehicle": ("auto",),
     "eligible": ("member", "membership"), "eligibility": ("member", "membership"), "join": ("member", "membership"),
     "student": ("college", "university"), "college": ("student", "university"), "university": ("student", "college"),
-    "cost": ("fee", "price"), "wallet": ("payment", "pay"),
+    "cost": ("fee", "price"), "overdraw": ("overdraft",), "overdrawn": ("overdraft",), "charge": ("fee",),
+    "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
@@ -45,8 +46,9 @@ LOWEST = frozenset("lowest lower smallest least cheapest".split())
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
 # Plural nouns that do not mean "several items" ("savings" is a product name).
-PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving"})
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply"})
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
+_HOW_MUCH = re.compile(r"\bhow much\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
@@ -169,6 +171,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             continue
         if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
+        if _HOW_MUCH.search(q.raw) and not _MONEY_OR_PERCENT.search(block.text):
+            continue  # "how much" asks for an amount
         scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
                        * affirmative_factor(q.raw, block) * url_match_factor(topic_words, block.url)
                        * (EXPIRED_FACTOR if block.expired else 1.0), doc_id))
@@ -277,7 +281,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     tie = LIST_TIE if q.several else HOURS_TIE if "hour" in q.query else NEAR_TIE
     same_kind = [doc_id for score, doc_id in scored if score >= top * tie and blocks[doc_id].is_row == best.is_row]
     if q.several and best.is_row:  # a list may span pages and dates (personal and business cards)
-        group = [d for d in same_kind if blocks[d].figures or not q.asks_money]  # a rate list holds rows with a rate
+        group = [d for d in same_kind if blocks[d].figures or not (RATE_WORDS | {"price"}).intersection(q.query)]  # a rate list holds rows with a rate
     else:
         group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].freshness == best.freshness]
     if q.info.amounts:  # a named balance or loan size picks one amount tier; the wider tiers are other facts

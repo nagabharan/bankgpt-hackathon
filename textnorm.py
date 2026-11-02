@@ -38,7 +38,7 @@ STOPWORDS = frozenset(
     # question filler that carries no topic
     "about any between correct current currently could did from general get give have has its keep know last like located m re ve ll d t going still new financed finance buy if into over under per bought purchased "
     "many may much need now please provide right same their them they today want was were would "
-    "spring summer fall autumn winter "
+    "spring summer fall autumn winter park will signup "
     # contraction stubs ("isn't" -> "isn") and premise wording ("why is it only 4.1%?") carry no topic
     "isn aren doesn didn don wasn weren hasn haven why only really true actually".split()
 )
@@ -83,9 +83,15 @@ def strip_links(text: str) -> tuple[str, list[str]]:
     return _MARKDOWN_LINK.sub(lambda m: m.group(1), text), links
 
 
+# Street words the site abbreviates ("3999 Pennsylvania Ave.", "Saratoga Rd."): one form for both spellings.
+_STREET_ABBREVIATIONS = {"avenue": "ave", "road": "rd", "boulevard": "blvd", "highway": "hwy", "street": "st", "drive": "dr"}
+
+
 @lru_cache(maxsize=1 << 16)  # millions of calls at ingest over a vocabulary of tens of thousands
 def stem(token: str) -> str:
     """Crude plural folding so 'months' matches 'month' and 'branches' matches 'branch'."""
+    if token in _STREET_ABBREVIATIONS:
+        return _STREET_ABBREVIATIONS[token]
     if len(token) <= 3 or not token.endswith("s") or token.endswith(("ss", "us", "is")):
         return token
     if token.endswith(("ches", "shes", "xes", "sses")):
