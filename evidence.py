@@ -40,7 +40,11 @@ def _shows_places(text: str) -> bool:
     return len(set(_STATE_WORD.findall(text))) >= 2 and bool(_SERVICE_AREA.search(text))
 
 
+_INSURANCE_LIMIT = re.compile(r"(?:insur\w*|ncua|fdic)\b[^.$]{0,80}\$\s?250,?000|\$\s?250,?000[^.]{0,60}\b(?:insur\w*|ncua|fdic)", re.I)  # the limit stated next to the insurer
+
 KINDS = (
+    Kind("insurance", re.compile(r"\b(?:insur\w*|ncua|fdic)\b", re.I), lambda t: bool(_INSURANCE_LIMIT.search(t)),
+         frozenset("insured insurance insure limit federally federal ncua fdic deposit deposits money protected much amount up".split()), 0.6, True),
     Kind("phone", re.compile(r"\b(?:contact|phone|call|reach|hotline|customer service|service number|support number)\b", re.I), lambda t: bool(_PHONE.search(t)),
          frozenset("update change information info detail contact phone call reach number speak talk customer service support help".split()),
          0.6, True),

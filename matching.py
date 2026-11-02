@@ -27,6 +27,7 @@ EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
 INFLECTION_MIN_IDF = 5.0  # "backed" -> "back" is another word: a common base form is not accepted
+FEE_STATED_FACTOR = 1.3
 NO_AMOUNT_FACTOR = 0.4  # a block without an amount, when the question asks how much
 
 # Other words the site uses for the same thing ("Home Loans - Purchase" rows never say mortgage).
@@ -40,12 +41,12 @@ ALIASES = {
     "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",),
     "send": ("transfer", "outgoing"), "sending": ("transfer", "outgoing"), "sent": ("transfer", "outgoing"), "receive": ("incoming",), "receiving": ("incoming",),
     "lose": ("lost",), "losing": ("lost",), "hit": ("deposit", "paid", "posted"), "cap": ("limit", "below", "maximum"),
-    "intro": ("introductory", "introduction"), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
+    "intro": ("introductory", "introduction"), "country": ("international", "foreign"), "shut": ("close", "closing", "closure"), "turn": ("activate", "enable"), "outside": ("non", "network"), "location": ("branch",), "first": ("1st",), "1st": ("first",), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
 }
-ALIAS_NO_SEARCH = frozenset({"share", "become", "qualify", "open", "serving"})  # satisfies a coverage check but must not pull in other products
+ALIAS_NO_SEARCH = frozenset({"share", "become", "qualify", "open", "serving", "first", "1st"})  # satisfies a coverage check but must not pull in other products
 # Words that say which value to pick, not what the topic is; no block contains "highest".
 SUPERLATIVES = frozenset("best highest higher largest lowest lower maximum minimum most least top".split())
 HIGHEST = frozenset("best highest higher largest maximum top".split())
@@ -59,7 +60,7 @@ _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
 _CODE = re.compile(r"[a-z]{3,}\d{2,}$")
 _COMPARISON = re.compile(r"\b(?:vs\.?|versus|compared? (?:to|with)|difference between)\b", re.I)  # two items asked about side by side
-_HOW_MUCH = re.compile(r"\bhow much\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
+_HOW_MUCH = re.compile(r"\bhow much\b|\bdollars?\b|\bminimum\s+(?:\w+\s+)?(?:deposit|balance|amount|to)\b|\bneed to (?:deposit|pay|put|spend)\b", re.I)
 _CLOCK_TIME = re.compile(r"\d\s*(?::\d\d)?\s*[ap]\.?m", re.I)
 RATE_WORDS = frozenset(("rate", "apr", "apy", "interest"))
 MONEY_WORDS = RATE_WORDS | frozenset(("fee", "cost", "charge", "price"))
@@ -72,7 +73,10 @@ _RATE_NEAR_PERCENT = re.compile(rf"{_RATE_TERM}\W+(?:\w+\W+){{0,6}}?{_PERCENT}|{
 # A price sits next to a price word; an address has a number or an @ in it.
 _PRICE_SHAPE = re.compile(rf"\b(?:price|cost|fee|charge)s?\b\W+(?:\w+\W+){{0,8}}?(?:{MONEY_MARK.pattern})|(?:{MONEY_MARK.pattern})\W*(?:\w+\W+){{0,8}}?\b(?:price|cost|fee|charge)", re.I)
 _ADDRESS_SHAPE = re.compile(r"\b\d{5}(?:-\d{4})?\b|@|\bP\.?\s?O\.? Box\b|\b\d{1,5}\s+(?:[A-Za-z.]+\s+){1,3}(?:St|Ave|Rd|Blvd|Hwy|Pkwy|Dr|Street|Avenue|Road|Boulevard|Highway|Drive)\b", re.I)
-VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "price": _PRICE_SHAPE, "hour": _CLOCK_TIME, "address": _ADDRESS_SHAPE}
+# "What date did it close?" asks for a calendar date, not for a block that says "date".
+_DATE_SHAPE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b(?:19|20)\d{2}-\d{2}-\d{2}\b")
+VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "price": _PRICE_SHAPE, "hour": _CLOCK_TIME, "address": _ADDRESS_SHAPE,
+                "date": _DATE_SHAPE}
 
 
 @lru_cache(maxsize=1 << 15)  # the same candidate blocks and page contexts recur across questions
@@ -128,7 +132,7 @@ def coverage(index: Index, required: list[str], block: Block) -> float:
 def has_anchor(index: Index, required: list[str], block: Block) -> bool:
     """The question's rarest topic word (the thing it names) must itself appear in the block;
     otherwise a block about something else can pass on the common words alone."""
-    words = [t for t in required if not any(c.isdigit() for c in t)]  # amounts/terms are matched by qualifiers
+    words = [t for t in required if not any(c.isdigit() for c in t) and t not in FRAMING_WORDS]  # amounts/terms are matched by qualifiers
     if not words:
         return True
     anchor = max(sorted(set(words)), key=index.idf)
@@ -141,12 +145,20 @@ def aliases_of(index: Index, token: str) -> tuple[str, ...]:
 
 
 def _parts_of(index: Index, token: str) -> tuple[str, ...]:
-    """The rarer half of a run-together name the site spells as two words ("homeready" -> "ready")."""
-    if len(token) < 8 or not token.isalpha() or index.df(token) > 3:
+    """The rarer half of a run-together name the site spells as two words ("homeready" -> "ready",
+    "hyvee" -> "vee" when the site writes "Hy-Vee")."""
+    if len(token) < 5 or not token.isalpha() or index.df(token) > 3:
         return ()
-    halves = [(token[:i], token[i:]) for i in range(3, len(token) - 2)]
-    found = [max(pair, key=index.idf) for pair in halves if all(index.df(p) > 0 for p in pair)]
+    halves = [(token[:i], token[i:]) for i in range(2, len(token) - 1)]
+    found = [max(pair, key=index.idf) for pair in halves
+             if all(index.df(p) > 0 for p in pair) and (len(token) >= 8 or _written_apart(index, *pair))]
     return tuple(dict.fromkeys(found[:1]))
+
+
+def _written_apart(index: Index, first: str, second: str) -> bool:
+    """The site writes the two words joined by a hyphen or space next to each other ("Hy-Vee")."""
+    text = index.cached("lower_text", lambda: "\n".join(b.text.lower() for b in index.blocks))
+    return re.search(rf"\b{first}[- ]{second}\b", text) is not None
 
 
 @lru_cache(maxsize=1 << 12)
@@ -154,7 +166,7 @@ def _inflections(token: str) -> tuple[str, ...]:
     """The base forms of a word ending -ing, -ed or -ers ("referring" -> "refer"): a question may
     use another form of the word the site uses."""
     for suffix in ("ing", "ers", "ed"):
-        if token.endswith(suffix) and len(token) - len(suffix) >= 4 and token.isalpha():
+        if token.endswith(suffix) and len(token) - len(suffix) >= 3 and token.isalpha():
             base = token[:-len(suffix)]
             forms = [base, base + "e"]
             if base[-1] == base[-2]:
@@ -187,7 +199,12 @@ def _shows_rate(block: Block) -> bool:
     return bool(_MONEY_OR_PERCENT.search(block.text)) and "%" in block.text and (block.is_row or bool(_RATE_NEAR_PERCENT.search(block.text)))
 
 
+_FEE_TALK = re.compile(r"\b(?:fees?|charges?|charged|costs?|prices?|penalt\w+|waive\w*|free|no charge)\b", re.I)
+
+
 def has_asked_value(query: list[str], block: Block) -> bool:
+    if ({"fee", "cost", "charge"} & set(query)) and not ({"apr", "apy", "interest"} & set(query)) and not _FEE_TALK.search(block.text):
+        return False  # a table of balance tiers has dollar amounts, but it does not state a fee
     asked = [word for word in VALUE_SHAPES if word in query]
     other = [word for word in asked if word not in RATE_WORDS]
     if any(not VALUE_SHAPES[word].search(block.text) for word in other):
@@ -229,9 +246,14 @@ class Question(NamedTuple):
     several: bool  # wants a list of rows
 
 
+_DATE_AS_REFERENCE = re.compile(r"\bas of (?:this |that |today'?s? |the )?date\b|\b(?:today'?s|this|that|current|effective) date\b", re.I)
+
+
 def _question(question: str) -> Question:
     text = clean(question)
     query = with_implied_words(text, content_tokens(text))
+    if _DATE_AS_REFERENCE.search(question):
+        query = [t for t in query if t != "date"]  # "as of this date" names the moment, it does not ask for a date
     asks_money = bool(MONEY_WORDS.intersection(query))
     wants_extreme = bool(RATE_WORDS.intersection(query)) and bool((HIGHEST | LOWEST).intersection(query))
     return Question(question, text, query, parse_question(text), intent_of(question, asks_money), asks_money,
@@ -241,7 +263,8 @@ def _question(question: str) -> Question:
 FRAMING_PROBE = 20  # best hits that must show a question word for it to count as part of the topic
 # Verbs and adverbs that only frame an ask ("what does it carry", "ways to avoid", "back then").
 FRAMING_WORDS = frozenset("""avoid carry cover load reply require describe recommend offered offer bring keep make come
-    brand then back past far late outside long directly people article limit""".split())
+    brand then back past far late outside long directly people article limit
+    range dodge mail turn down otherwise exactly basically usually typically""".split())
 _FRAMING_ENDINGS = ("ing", "ed", "ly")
 
 
@@ -277,6 +300,7 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     entities = _entities(index, q.raw)
     codes = [t for t in required if _CODE.match(t)]  # "CHECK500": a code named in the question must be in the block
     existence = bool(_EXISTENCE.search(q.raw))
+    wants_fee = bool({"fee", "cost", "charge"} & set(q.query))
     topic_required = [t for t in required if t != "dupaco"]
     scored = []
     for score, doc_id in hits:
@@ -295,9 +319,11 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
         if existence and (coverage(index, topic_required, block) < 1.0):
             continue  # "does Dupaco have X": a block that lacks part of X does not show Dupaco has it
         if wants_amount and not _MONEY_OR_PERCENT.search(block.text):
-            if q.asks_money:
-                continue  # "how much is the fee" asks for an amount
+            if q.asks_money or q.intent == "membership":
+                continue  # "how much is the fee", "minimum to join" ask for an amount
             factor *= NO_AMOUNT_FACTOR  # "how much do I need to join": the passage with an amount is likelier
+        if wants_fee and _PRICE_SHAPE.search(block.text):
+            factor *= FEE_STATED_FACTOR  # the fee and its amount in the same breath
         scored.append((score * factor * segment_factor(q.intent, block.url) * index.page_prior.get(block.url, 1.0)
                        * affirmative_factor(q.raw, block) * url_match_factor(topic_words, block.url)
                        * (EXPIRED_FACTOR if block.expired else 1.0), doc_id))
@@ -311,7 +337,7 @@ def _score_candidates(index: Index, q: Question) -> list[tuple[float, int]]:
     if not q.asks_money:
         return _drop_superseded(index, _qualifying(index, q, rows_only=False))
     rows = _qualifying(index, q, rows_only=True)
-    if rows:
+    if rows and not _fee_in_prose(index, q, rows):
         return _drop_superseded(index, rows)
     prose = _qualifying(index, q, rows_only=False)  # a rate stated in a sentence
     # Blog articles and press releases discuss rates in general or years ago; they do not state this
@@ -321,6 +347,19 @@ def _score_candidates(index: Index, q: Question) -> list[tuple[float, int]]:
         prose = [(s, d) for s, d in prose if any(lo <= y <= hi for y in q.info.years
                                                  for lo, hi in year_spans_in(index.blocks[d].text))]
     return prose
+
+
+FEE_PROSE_MARGIN = 3.0  # a sentence this much better than the best row states the fee itself
+
+
+def _fee_in_prose(index: Index, q: Question, rows: list[tuple[float, int]]) -> bool:
+    """A fee ("avoid the monthly fee on checking") is often stated in a sentence while the only
+    matching row is a rate table; a clearly better-matching sentence on a product page wins."""
+    if not ({"fee", "cost", "charge"} & set(q.query)) or {"apr", "apy", "interest"} & set(q.query):
+        return False
+    best_row = rows[0][0]
+    return any(score >= best_row * FEE_PROSE_MARGIN and not is_article(index.blocks[d].url)
+               for score, d in _qualifying(index, q, rows_only=False)[:5])
 
 
 def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tuple[float, int]]:
@@ -365,11 +404,14 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
             return [Block(best.url, f"You can reach Dupaco at {digits[:3]}-{digits[3:6]}-{digits[6:]}.",
                           context=best.context, page_date=best.page_date)]
         return [best]
+    if kind.name == "insurance":  # one fixed fact stated many ways: the most direct statement, whatever the wording
+        return [min(found, key=lambda sb: (len(sb[1].text), sb[1].url))[1]]
     return [max(found, key=lambda sb: sb[0])[1]]
 
 
 # Wordings that ask for a rate or for opening hours without saying so.
 _PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_I_PAY = re.compile(r"\b(?:i|we) (?:have to |need to |will |would )?pay\b|\bpay(?:ing)? (?:to|for)\b", re.I)  # what the member pays is a cost, not a rate
 _OFFER_WORDS = re.compile(r"\b(?:cash ?back|promo\w*|bonus|offers?|codes?|rewards?|referral|refer\w*)\b", re.I)  # earning an offer is not a rate
 _STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
 
@@ -381,7 +423,7 @@ def with_implied_words(text: str, query: list[str]) -> list[str]:
     """Add the word a wording implies: "what does it pay?" or a stated percent asks for a rate,
     "when is it open?" for hours."""
     bonus = any(root(t) in _BONUS_ROOTS for t in query)  # "how much can I earn by referring a friend" asks for an amount
-    pays = _PAYS.search(text) and not _OFFER_WORDS.search(text)
+    pays = _PAYS.search(text) and not _OFFER_WORDS.search(text) and not _I_PAY.search(text)
     extra = (["rate"] if (pays or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) and not bonus else [])
     extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
     return query + extra
