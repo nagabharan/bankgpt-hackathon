@@ -3,13 +3,14 @@ then gather the sibling blocks that belong in the same answer."""
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question
 from schedules import compares_hours, distinct_schedules
-from segments import intent_of, segment_factor
+from segments import intent_of, page_type, segment_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
@@ -218,3 +219,26 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     kept = group[:MAX_LIST_BLOCKS if several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
     return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
+
+
+ACTION_WORDS = frozenset({"join", "apply", "open", "enroll", "register", "signup"})
+HOST_WORD_WEIGHT = 3
+
+
+def asks_where_online(query: list[str]) -> bool:
+    """"How do I join/apply/open ... online?": the answer is a link."""
+    return "online" in query and bool(ACTION_WORDS.intersection(query))
+
+
+def best_link(index: Index, query: list[str]) -> str:
+    """The site link whose address best matches the question's words (host words count triple)."""
+    uses: Counter = Counter(link for block in index.blocks for link in block.links
+                            if link.startswith("http") and page_type(link) not in ("blog", "news", "calculator", "document"))
+    words = set(query) - {"online"}
+    def score(link: str) -> tuple[int, int, str]:
+        host, _, path = link.split("//", 1)[-1].partition("/")
+        host_hits = sum(w in set(re.split(r"\W+", host.lower())) for w in words)
+        path_hits = sum(w in set(re.split(r"\W+", path.lower())) for w in words)
+        return (HOST_WORD_WEIGHT * host_hits + path_hits, uses[link], link)
+    best = max(uses, key=score, default="")
+    return best if best and score(best)[0] > 0 else ""

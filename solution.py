@@ -16,8 +16,9 @@ from askdate import split_date
 from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
-from matching import asks_for_link, links_of, select_blocks
+from matching import asks_for_link, asks_where_online, best_link, links_of, select_blocks
 from pressfacts import answer_from_facts, sentence_for
+from textnorm import clean, content_tokens
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
@@ -78,6 +79,11 @@ class KnowledgeBase:
         fact = answer_from_facts(question, view.dated_facts) if view else None
         if fact is not None:
             return Answer(text=sentence_for(fact), sources=[Source(fact.url, view.snapshot_id, fact.value)])
+        if view and asks_where_online(content_tokens(clean(question))):
+            link = best_link(view.index, content_tokens(clean(question)))
+            if link:
+                return Answer(text=f"You can do that online here: {link}",
+                              sources=[Source(link, view.snapshot_id, link)])
         blocks = select_blocks(view.index, question) if view else []
         if not blocks:
             return Answer(text=NOT_LISTED, confident=False)
