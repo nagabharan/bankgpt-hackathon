@@ -57,6 +57,10 @@ page and date, at most six; the hours comparison shows up to three schedules of 
 rate or fee word is answered from the newest snapshot and an earlier one (the first snapshot
 taken in or after the month named, else the second newest, or the oldest if no month is named) as
 "Now: ... / As of <date>: ...", or "No change since <date>". Both values are printed on purpose.
+Two named dates ("between May 12 and June 9", "from May to September") pick the two snapshots
+directly. Each snapshot contributes its best-ranked rate table; rows are paired by tier (model-year
+ranges by rank, so "2023-26" lines up with "2024-27") and only the tiers whose figures differ are
+printed (at most eight).
 
 **Sources.** A normal answer cites its page and every other page carrying exactly the same text,
 never a page with a different value (change and online-link answers cite a single page).
@@ -84,8 +88,9 @@ locations", "the third time"), the value on the release with the latest printed 
 Expired promotions are not specially handled when answering; the "ended/expired" signal is used
 only to pick a winner in `conflicts()`.
 
-Dates written in the question work too: "in May 2026" or "as of March" selects the snapshot
-(when no `as_of` is given) and is removed from the question; a date after the newest snapshot
+Dates written in the question work too: "in May 2026", "as of March", "on May 12, 2026",
+"2026-05-12" or a season ("in the fall": spring ends May 31, summer Aug 31, fall Nov 30, winter
+Feb 28) selects the snapshot (when no `as_of` is given) and is removed from the question; a date after the newest snapshot
 ("today (October 2026)") is left alone. `as_of` selects the newest snapshot taken on or before it
 (ISO or M/D/YYYY); an unreadable date is treated as "now", and a date before the first snapshot
 gets "isn't listed".
@@ -115,12 +120,14 @@ lists, excluding blog and press-release pages from rate answers, and treating on
 programs as exceptional. No answer, number or URL from the practice set is stored in the code.
 
 ## Known gaps
-- Conflicts cover rate-like numbers, branch counts and "Nth time recognized" ordinals; other
-  counts, fees and award facts that differ between pages are not detected.
-- Answers are verbatim rows or passages (except the press-release and link sentences); the
-  "highest/lowest" pick is not applied, and "check a stated value" questions are not supported.
-- Change answers compare the best-matching row in each snapshot; if a table was restructured
-  between the two, the rows may be different tiers; count questions do not take the change path.
+- Conflicts cover rate-like numbers, branch counts (an undated page counts as the oldest
+  statement) and "Nth time recognized" ordinals; other statistics, fees and award facts that
+  differ between pages are not detected.
+- Answers are verbatim rows or passages (except the press-release and link sentences);
+  "highest/lowest rate" keeps the rate rows holding the extreme figure (fees are not compared),
+  and "check a stated value" questions are not supported.
+- Change answers compare the best-ranked rate table of each snapshot by tier; if a table was
+  restructured between the two, tiers that no longer match are skipped.
 - "Last year" is not resolved to a calendar year: "how many employees used Volunteer Time Off
   last year" returns the best-matching statistic, which may not be the one a reader expects.
 - One-off facts in prose are found only when the question matches an evidence kind or ordinary
