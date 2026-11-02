@@ -14,12 +14,18 @@ _STARTS_WITH_DATE = re.compile(r"(?:\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2}|(?
 _NAMED_EXPIRED = re.compile(r"expired|offer-ended|ended-offer", re.I)
 
 
+# Every phrase the two patterns above can match contains one of these words: a text without any is live.
+_EXPIRY_HINT = re.compile(r"\b(?:end(?:s|ed)?|expire[sd]?|is over|no longer available|through|until|thru|valid)\b", re.I)
+
+
 def page_looks_expired(url: str, title: str) -> bool:
     return bool(_NAMED_EXPIRED.search(url) or _NAMED_EXPIRED.search(title))
 
 
 def is_expired(text: str, snapshot_date: str) -> bool:
     """True when the text says the offer ended, or states an end date before `snapshot_date`."""
+    if not _EXPIRY_HINT.search(text):
+        return False
     if _ENDED_WORDS.search(text):
         return True
     for match in _DEADLINE.finditer(text):

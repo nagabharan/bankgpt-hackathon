@@ -166,8 +166,9 @@ def _split_name(index: Index, token: str) -> tuple[str, ...]:
 
 def _written_apart(index: Index, first: str, second: str) -> bool:
     """The site writes the two words joined by a hyphen or space next to each other ("Hy-Vee")."""
-    text = index.cached("lower_text", lambda: "\n".join(b.text.lower() for b in index.blocks))
-    return re.search(rf"\b{first}[- ]{second}\b", text) is not None
+    together = set(index.blocks_with(first)).intersection(index.blocks_with(second))  # only these can hold both words
+    pattern = re.compile(rf"\b{first}[- ]{second}\b")
+    return any(pattern.search(index.blocks[doc_id].text.lower()) for doc_id in sorted(together))
 
 
 @lru_cache(maxsize=1 << 12)
@@ -523,12 +524,26 @@ PRODUCT_WORD_IDF = 5.0  # as rare as a product name on the site...
 PRODUCT_WORD_DF = 20  # ...but used on enough blocks to be a real word, not a typo or a synonym the site avoids
 
 
+def _product_words(index: Index) -> frozenset[str]:
+    """Words of the names of priced rows."""
+    return index.cached("product_words", lambda: frozenset(
+        t for b in index.blocks if b.is_row and (b.figures or _MONEY_OR_PERCENT.search(b.text)) and not b.url.endswith((".xls", ".xlsx"))
+        for t in content_tokens(f"{b.label} {b.caption}")))
+
+
+def warm(index: Index) -> None:
+    """Build the per-index tables every question would otherwise build on its first use, so that
+    no answer pays for them."""
+    _name_tokens(index)
+    _product_words(index)
+    index.cached("heading_copies", lambda: _short_blocks(index))
+    index.cached("teaser_sources", lambda: _opening_index(index))
+
+
 def lacks_named_product(index: Index, required: list[str], block: Block) -> bool:
     """A rate question names its product by words that are specific on the site (HELOC, wire, Bright):
     every one of them must be in the block, or the block is another product's rate."""
-    names = index.cached("product_words", lambda: frozenset(
-        t for b in index.blocks if b.is_row and (b.figures or _MONEY_OR_PERCENT.search(b.text)) and not b.url.endswith((".xls", ".xlsx"))
-        for t in content_tokens(f"{b.label} {b.caption}")))  # words of the names of priced rows
+    names = _product_words(index)
     return any(t in names and t not in TIER_WORDS and index.idf(t) >= PRODUCT_WORD_IDF and index.df(t) >= PRODUCT_WORD_DF and not is_present(index, t, block)
                for t in sorted(set(required)) if not any(c.isdigit() for c in t))
 

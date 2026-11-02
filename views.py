@@ -10,6 +10,7 @@ from bm25 import Index
 from blocks import Block, parse_page
 from contract import Snapshot
 from expiry import is_expired, page_looks_expired
+from matching import warm
 from pressfacts import DatedFact, dated_facts
 from segments import page_prior
 from sentences import build_index as build_sentence_index
@@ -60,6 +61,7 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     index.page_prior = _page_priors(blocks, seen)
     index.acronyms = acronyms_defined(texts, index)
     sentences = build_sentence_index(kept, index.page_prior, index.acronyms)
+    warm(index)
     return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins, sentences)
 
 
@@ -91,11 +93,29 @@ def _spelled_out(words: list[str], acronym: str) -> list[str]:
     return []
 
 
+_ACRONYM_MARK = re.compile(r"\(([A-Z]{2,6})\)")
+_DEFINITION_REACH = 400  # characters before the acronym that can hold its seven words
+
+
+def _definitions(text: str) -> list[tuple[str, str]]:
+    """The (words, acronym) pairs of _ACRONYM_DEFINITION, found by looking only just before each
+    "(ACR)" instead of scanning every word of the page."""
+    found = []
+    for mark in _ACRONYM_MARK.finditer(text):
+        start = max(0, mark.start() - _DEFINITION_REACH)
+        if start:  # begin at a word start, never inside a word
+            gap = re.search(r"\s", text[start:mark.start()])
+            start = start + gap.end() if gap else mark.start()
+        window = text[start:mark.end()]
+        found += [(m.group(1), m.group(2)) for m in _ACRONYM_DEFINITION.finditer(window) if m.end() == len(window)]
+    return found
+
+
 def acronyms_defined(texts: list[str], index: Index) -> dict[str, tuple[str, ...]]:
     """acronym token -> the words it stands for, for acronyms the blocks rarely use on their own."""
     found: dict[str, tuple[str, ...]] = {}
     for text in texts:
-        for words, acronym in _ACRONYM_DEFINITION.findall(strip_links(text)[0]):
+        for words, acronym in _definitions(strip_links(text)[0]):
             expansion = tuple(t for t in content_tokens(" ".join(_spelled_out(words.split(), acronym))) if t not in STOPWORDS)
             token = acronym.lower()
             if len(expansion) >= 2 and token not in found and token not in STOPWORDS \
