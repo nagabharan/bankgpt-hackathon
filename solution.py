@@ -16,14 +16,16 @@ from askdate import split_date
 from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
-from matching import asks_for_link, asks_where_online, best_link, links_of, select_blocks
+from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, links_of, select_blocks
 from pressfacts import answer_from_facts, sentence_for
+from qualifiers import parse_question
 from textnorm import clean, content_tokens
 from views import SnapshotView, build_view
 
 # Refusal text must contain no digits: a refusal fails if it adds any number the
 # question did not contain.
 NOT_LISTED = "That isn't listed on our website; please contact us."
+OFFER_ENDED = "That offer is no longer available."
 
 
 MAX_SOURCES = 5
@@ -78,7 +80,12 @@ class KnowledgeBase:
         else:
             written_date = None
         view = self._view_for(iso_date(as_of) or written_date)
-        fact = answer_from_facts(question, view.dated_facts) if view else None
+        calendar_years = parse_question(clean(question)).calendar_years
+        cutoff = f"{max(calendar_years)}-12-31" if calendar_years else ""
+        if (calendar_years and self.views and max(calendar_years) < int(self.views[0].taken_on[:4])
+                and MONEY_WORDS.intersection(content_tokens(clean(question)))):
+            return Answer(text=NOT_LISTED, confident=False)  # the site's rates start in the first snapshot
+        fact = answer_from_facts(question, view.dated_facts, cutoff) if view else None
         if fact is not None:
             return Answer(text=sentence_for(fact), sources=[Source(fact.url, view.snapshot_id, fact.value)])
         if view and asks_where_online(content_tokens(clean(question))):
@@ -89,6 +96,8 @@ class KnowledgeBase:
         blocks = select_blocks(view.index, question) if view else []
         if not blocks:
             return Answer(text=NOT_LISTED, confident=False)
+        if blocks[0].expired:  # the only match is an ended offer: do not present its terms as a live deal
+            return Answer(text=OFFER_ENDED, confident=False)
         lines = [block.text for block in blocks]
         if asks_for_link(question):
             lines += links_of(blocks)

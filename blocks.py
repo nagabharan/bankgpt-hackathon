@@ -54,6 +54,7 @@ class Block:
     caption: str = ""  # rows only: the table's title, which varies between pages
     context: str = ""  # page title, URL path words and nearest H1 > H2: searchable, never shown
     page_date: str = ""  # the date the page states for itself ("" when it states none)
+    expired: bool = False  # the offer this block describes has ended (set when the snapshot date is known)
 
     @property
     def freshness(self) -> str:

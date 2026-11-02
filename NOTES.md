@@ -61,6 +61,15 @@ taken in or after the month named, else the second newest, or the oldest if no m
 **Sources.** A normal answer cites its page and every other page carrying exactly the same text,
 never a page with a different value (change and online-link answers cite a single page).
 
+**Years and expired offers.** Each year in a question is classified by its own context: attached to a
+vehicle word ("a 2017 car", "model year 2017") it is a model year matched to the row's range; after
+in/during/as of/since/by it is a calendar year, which prefers pages dated that year and cuts dated
+press facts off at the end of that year (a rate question about a year before the first snapshot gets
+"isn't listed"); a stated percent or long number is a claim, not a topic word. A block is expired when its
+page address or title says so, its text says the offer ended, or it states an end date earlier than the
+snapshot's own date; expired blocks lose heavily in ranking, and if the only match is an ended offer the
+answer is "That offer is no longer available."
+
 **Not on the site.** If no block qualifies, the answer is a short "isn't listed, please contact
 us" with no numbers, and `confident` is false. The question's rarest topic word must appear in
 the block, which also refuses questions about other banks or products the credit union lacks.

@@ -51,12 +51,12 @@ def _names_another_organisation(question: str, recognisers: set[str]) -> bool:
     return any(n not in _ALWAYS_ALLOWED and n not in recognisers for n in names)
 
 
-def answer_from_facts(question: str, facts: list[DatedFact]) -> DatedFact | None:
+def answer_from_facts(question: str, facts: list[DatedFact], not_after: str = "") -> DatedFact | None:
     """The latest-dated fact that the question asks about, or None.
 
     "How many branches...?" asks for the branch count; "what recognition ... from Forbes?"
     asks for the ordinal for that organisation. Old pages keep repeating superseded values,
-    so the value on the newest page wins."""
+    so the value on the newest page wins; `not_after` (an ISO date) asks what the pages said by then."""
     wanted = None
     if _names_another_organisation(question, {f.label.removesuffix(" recognition") for f in facts}):
         return None
@@ -66,7 +66,7 @@ def answer_from_facts(question: str, facts: list[DatedFact]) -> DatedFact | None
         orgs = {f.label.removesuffix(" recognition") for f in facts if f.label.endswith(" recognition")}
         asked = [org for org in sorted(orgs) if re.search(rf"\b{re.escape(org)}\b", question, re.I)]
         wanted = f"{asked[0]} recognition" if asked else None
-    candidates = [f for f in facts if f.label == wanted]
+    candidates = [f for f in facts if f.label == wanted and (not not_after or f.date <= not_after)]
     return max(candidates, key=lambda f: (f.date, f.value)) if candidates else None
 
 

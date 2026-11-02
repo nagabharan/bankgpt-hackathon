@@ -34,3 +34,8 @@ def page_date(markdown: str) -> str:
         return max(stated)
     top = _ANY.search(markdown[:DATELINE_WINDOW])
     return _iso(top) if top else ""
+
+
+def dates_in(text: str) -> list[str]:
+    """Every ISO date written in `text` (month names, M/D/YYYY, ISO)."""
+    return [d for d in (_iso(m) for m in _ANY.finditer(text)) if d]

@@ -68,6 +68,8 @@ _ASSERTED_NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)(?=%)|\b(\d{6,})\b")
 _MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
 # Amount tiers: "$10000 - $24999.99", "$25000+", "$300000 or less".
 _AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")
+CALENDAR_MATCH_FACTOR = 1.3  # block's page is dated in the calendar year the question names
+CALENDAR_OTHER_FACTOR = 0.85
 NO_AMOUNT_BAND_FACTOR = 0.2  # every amount in the question lies outside the block's amount tiers
 
 
@@ -93,6 +95,7 @@ class QuestionInfo:
     tiers: frozenset[str]
     consumed: frozenset[str]  # tokens the qualifiers already account for (digits, units)
     amounts: tuple[float, ...] = ()  # dollar amounts the question names (a balance, a loan size)
+    calendar_years: tuple[int, ...] = ()  # years the question is about in time ("in 2023"), not model years
 
     def fit(self, block: Block, ignore_tiers: bool = False) -> float:
         """0 rules the block out; otherwise a factor to scale its score by.
@@ -107,6 +110,8 @@ class QuestionInfo:
                 factor *= NO_YEAR_RANGE_FACTOR
             elif not any(lo <= y <= hi for y in self.years for lo, hi in spans):
                 return 0.0
+        if self.calendar_years and block.page_date:  # a page dated in the year asked about is the better source
+            factor *= CALENDAR_MATCH_FACTOR if int(block.page_date[:4]) in self.calendar_years else CALENDAR_OTHER_FACTOR
         if self.amounts:
             bands = amount_bands_in(block.text)
             if bands and not all(any(lo <= a <= hi for lo, hi in bands) for a in self.amounts):
@@ -119,17 +124,36 @@ class QuestionInfo:
         return factor
 
 
+_YEAR_NUMBER = r"(?:19|20)\d{2}"
+_VEHICLE_NOUN = r"(?:model(?:[\s-]year)?|cars?|vehicles?|trucks?|suvs?|vans?|motorcycles?|bikes?|boats?|rvs?|autos?|automobiles?)"
+_MODEL_YEAR_CONTEXT = re.compile(
+    rf"\bmodel[\s-]year\s+(?P<a>{_YEAR_NUMBER})\b|\b(?P<b>{_YEAR_NUMBER})\s+(?:\w+\s+)?{_VEHICLE_NOUN}\b", re.I)
+_CALENDAR_CONTEXT = re.compile(rf"\b(?:in|during|as of|since|by|of)\s+(?P<c>{_YEAR_NUMBER})\b", re.I)
+_ANY_VEHICLE_WORD = re.compile(rf"\b{_VEHICLE_NOUN}\b", re.I)
+
+
+def split_years(text: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """(model years, calendar years). A year is a model year when attached to a vehicle noun, a calendar
+    year after in/during/as of/since/by/of; a bare year is a model year if the question is about vehicles."""
+    spans = {m.group(0) for m in YEAR_SPAN.finditer(text)}
+    every = {int(y) for y in _YEAR.findall(text) if not any(y in s for s in spans)}
+    model = {int(g) for m in _MODEL_YEAR_CONTEXT.finditer(text) for g in (m.group("a"), m.group("b")) if g}
+    calendar_ = {int(m.group("c")) for m in _CALENDAR_CONTEXT.finditer(text)} - model
+    bare = every - model - calendar_
+    (model if _ANY_VEHICLE_WORD.search(text) else calendar_).update(bare)
+    return tuple(sorted(model)), tuple(sorted(calendar_))
+
+
 def parse_question(text: str) -> QuestionInfo:
     """`text` is the cleaned question."""
     consumed = set()
     for number, unit in _TERM.findall(text):
         consumed.update((number, stem(unit.lower())))
-    spans = {m.group(0) for m in YEAR_SPAN.finditer(text)}
-    years = tuple(sorted({int(y) for y in _YEAR.findall(text) if not any(y in s for s in spans)}))
-    consumed.update(str(y) for y in years)
+    years, calendar_years = split_years(text)
+    consumed.update(str(y) for y in (*years, *calendar_years))
     consumed.update(m.lower() for m in _MONTH_NAME.findall(text))  # a month is a date qualifier, not a topic word
     consumed.update(n for pair in _ASSERTED_NUMBER.findall(text) for n in pair if n)  # a stated percent or long number is a claim
     raw_amounts = _MONEY_AMOUNT.findall(text)
     consumed.update(raw_amounts)
     amounts = tuple(float(a) for a in raw_amounts)
-    return QuestionInfo(terms_in(text), years, tier_words_in(text), frozenset(consumed), amounts)
+    return QuestionInfo(terms_in(text), years, tier_words_in(text), frozenset(consumed), amounts, calendar_years)

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from bm25 import Index
 from blocks import Block, parse_page
 from contract import Snapshot
+from expiry import is_expired, page_looks_expired
 from pressfacts import DatedFact, dated_facts
 from segments import page_prior
 from textnorm import clean
@@ -40,7 +41,10 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
             continue
         seen.add(url)
         facts += dated_facts(url, clean(page.markdown))
+        page_expired = page_looks_expired(url, page.title)
         for block in parse_page(url, page.markdown, page.title):
+            if page_expired or is_expired(block.text, snapshot.taken_on):
+                block = replace(block, expired=True)  # an ended offer, judged at this snapshot's date
             pages_per_text[block.text].add(url)
             blocks.append(block)
     kept = [b for b in blocks if len(pages_per_text[b.text]) < BOILERPLATE_MIN_PAGES]

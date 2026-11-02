@@ -66,7 +66,7 @@ def _term_signature(label: str) -> str:
 def _row_facts(blocks: list[Block]) -> list[_Fact]:
     rows = [b for b in blocks if b.is_row and b.figures]
     ranks = _tier_ranks(rows)
-    return [_Fact(row, _number(cell), kind, _aligned_label(row, ranks), caption_words(row))
+    return [_Fact(row, _number(cell), kind, _aligned_label(row, ranks), caption_words(row), row.expired)
             for row in rows for kind, cell in row.figures]
 
 

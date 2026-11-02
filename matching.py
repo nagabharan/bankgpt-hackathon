@@ -21,6 +21,7 @@ NEAR_TIE = 0.9  # candidates within this share of the best score compete on fres
 HOURS_TIE = 0.6
 LIST_TIE = 0.5
 MAX_BLOCKS = 6
+EXPIRED_FACTOR = 0.05  # an ended offer loses to any live one
 MAX_LIST_BLOCKS = 8
 MAX_LINKS = 3
 
@@ -139,7 +140,8 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
         scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
-                       * affirmative_factor(question, block) * url_match_factor(topic_words, block.url), doc_id))
+                       * affirmative_factor(question, block) * url_match_factor(topic_words, block.url)
+                       * (EXPIRED_FACTOR if block.expired else 1.0), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
@@ -190,7 +192,8 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
                 and has_anchor(index, required, block)
                 and not (kind.skip_articles and is_article(block.url))):
             found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
-                          * (coverage(index, required, block) if required else 1.0), block))  # the fuller topic match wins
+                          * (coverage(index, required, block) if required else 1.0)
+                          * (EXPIRED_FACTOR if block.expired else 1.0), block))  # the fuller topic match wins
             if len(found) == EVIDENCE_POOL:
                 break
     if not found:
