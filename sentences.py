@@ -243,6 +243,8 @@ def better_than(index: Index, blocks: list[Block], found: list[Block], question:
         return bool(shapes)
     if blocks[0].is_row or any(block.text in other.text for block in found for other in blocks):
         return False  # a table row, or a passage that already holds the sentence
+    if all(len(b.text) <= 100 and not b.text.rstrip().endswith((".", "!", "?")) for b in blocks) and {f.url for f in found} <= {b.url for b in blocks}:
+        return False  # only the page's headline was found: the paragraphs under it are added, a lone sentence would cut them out
     required = _required(question)
     if shapes:
         return not any(shape.search(piece) and coverage(index, required, replace(b, text=piece)) >= SHAPED_COVERAGE

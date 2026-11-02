@@ -13,7 +13,7 @@ from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question, tier_words_in, year_spans_in
 from schedules import OPENING, asks_schedules, distinct_schedules
 from segments import authority, intent_of, is_article, page_type, segment_factor, url_match_factor
-from textnorm import MONEY_MARK, MONTHS, clean, content_tokens, plural_nouns, stem
+from textnorm import MONEY_MARK, MONTHS, STREET_ABBREVIATIONS, clean, content_tokens, plural_nouns, stem
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
 # Share of the question's idf mass the block must cover, else it does not answer the question.
@@ -38,7 +38,7 @@ ALIASES = {
     "cost": ("fee", "price"), "overdraw": ("overdraft",), "overdrawn": ("overdraft",), "charge": ("fee",),
     "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
     "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
-    "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",),
+    "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",), "telephone": ("phone",),
     "send": ("transfer", "outgoing"), "sending": ("transfer", "outgoing"), "sent": ("transfer", "outgoing"), "receive": ("incoming",), "receiving": ("incoming",),
     "lose": ("lost",), "losing": ("lost",), "hit": ("deposit", "paid", "posted"), "cap": ("limit", "below", "maximum"),
     "intro": ("introductory", "introduction"), "country": ("international", "foreign"), "shut": ("close", "closing", "closure"), "turn": ("activate", "enable"), "outside": ("non", "network"), "location": ("branch",), "first": ("1st",), "1st": ("first",), "yield": ("apy", "dividend", "rate"), "introductory": ("intro",), "promo": ("promotion", "offer", "reward", "earn"),
@@ -55,7 +55,7 @@ LOWEST = frozenset("lowest lower smallest least cheapest".split())
 LINK_WORDS = frozenset({"link", "url", "website", "site"})
 LIST_WORDS = frozenset({"all", "every", "each", "list", "offer", "option", "type", "kind"})
 # Plural nouns that do not mean "several items" ("savings" is a product name).
-PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply", "reward"})
+PLURAL_EXEMPT = frozenset({"hour", "month", "year", "day", "week", "saving", "apply", "reward", "rapid", "fall"})  # rapid, fall: Cedar Rapids, Cedar Falls
 _MONEY_OR_PERCENT = re.compile(f"%|{MONEY_MARK.pattern}")
 _EXISTENCE = re.compile(r"^\s*(?:does|do)\s+(?:dupaco|you|the credit union)\s+(?:have|offer|provide)\b", re.I)
 _CODE = re.compile(r"[a-z]{3,}\d{2,}$")
@@ -75,6 +75,7 @@ _PRICE_SHAPE = re.compile(rf"\b(?:price|cost|fee|charge)s?\b\W+(?:\w+\W+){{0,8}}
 _ADDRESS_SHAPE = re.compile(r"\b\d{5}(?:-\d{4})?\b|@|\bP\.?\s?O\.? Box\b|\b\d{1,5}\s+(?:[A-Za-z.]+\s+){1,3}(?:St|Ave|Rd|Blvd|Hwy|Pkwy|Dr|Street|Avenue|Road|Boulevard|Highway|Drive)\b", re.I)
 # "What date did it close?" asks for a calendar date, not for a block that says "date".
 _DATE_SHAPE = re.compile(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b(?:19|20)\d{2}-\d{2}-\d{2}\b")
+PHONE_FACTOR = 1.5  # a phone question prefers the line that holds a number to dial
 VALUE_SHAPES = {**dict.fromkeys(MONEY_WORDS, _MONEY_OR_PERCENT), "price": _PRICE_SHAPE, "hour": _CLOCK_TIME, "address": _ADDRESS_SHAPE,
                 "date": _DATE_SHAPE}
 
@@ -184,6 +185,30 @@ _NOT_ENTITIES = frozenset("monday tuesday wednesday thursday friday saturday sun
 ENTITY_MIN_IDF = 6.0  # a capitalised word that is rare on the site names a place or a program
 
 
+LOWERCASE_ENTITY_MIN_IDF = 5.5  # a place typed in lower case is rarer than a common word but not as rare as a program
+NAME_MIN_CAPITALISED = 3
+NAME_CAPITALISED_SHARE = 0.85
+_LOWER_WORD = re.compile(r"\b[a-z]{4,}\b")
+_PLACE_LEAD = frozenset({"in", "at", "near", "from"})
+_PLACE_NOUNS = frozenset({"branch", "branches", "lab", "office", "location", "atm", "campus", "store"})
+_STREET_WORDS = frozenset(STREET_ABBREVIATIONS.values()) | frozenset(STREET_ABBREVIATIONS)
+
+
+def _name_tokens(index: Index) -> frozenset[str]:
+    """Words the site almost always writes with a capital letter in mid-sentence: names of places and programs."""
+    def compute() -> frozenset[str]:
+        capitalised: Counter = Counter()
+        lower: Counter = Counter()
+        for block in index.blocks:
+            if block.is_row:
+                continue
+            capitalised.update(stem(w.lower()) for w in _CAPITALISED.findall(block.text))
+            lower.update(stem(w) for w in _LOWER_WORD.findall(block.text))
+        return frozenset(t for t, n in capitalised.items()
+                         if n >= NAME_MIN_CAPITALISED and n >= NAME_CAPITALISED_SHARE * (n + lower.get(t, 0)))
+    return index.cached("name_tokens", compute)
+
+
 def _entities(index: Index, raw: str) -> frozenset[str]:
     """Rare capitalised words after the first ("the Platteville branch"): they name the place or
     program asked about and must appear in an answer's passage or page title."""
@@ -193,6 +218,37 @@ def _entities(index: Index, raw: str) -> frozenset[str]:
         if token not in _NOT_ENTITIES and word not in MONTHS and index.idf(token) >= ENTITY_MIN_IDF and index.df(token) > 0:
             found.add(token)
     return frozenset(found)
+
+
+def _lowercase_entities(index: Index, raw: str, skip: frozenset[str]) -> frozenset[str]:
+    """Words the site always writes as a name, typed in lower case beside another name or a place word
+    ("cedar rapids", "the platteville branch"): they must appear somewhere on the answer's page."""
+    found = set()
+    words = re.findall(r"[a-z]+", raw.lower())
+    names = None
+    for i, word in enumerate(words):
+        token = stem(word)
+        if (len(word) < 4 or token in found or token in skip or token in _NOT_ENTITIES or token in _STREET_WORDS
+                or index.idf(token) < LOWERCASE_ENTITY_MIN_IDF or index.df(token) == 0):
+            continue
+        names = _name_tokens(index) if names is None else names
+        if token not in names:
+            continue
+        before = words[i - 1] if i else ""
+        after = words[i + 1] if i + 1 < len(words) else ""
+        # a name typed in lower case sits beside another name or a place word ("the platteville branch", "in madison")
+        if before in _PLACE_LEAD or after in _PLACE_NOUNS or stem(after) in names or stem(before) in names:
+            found.add(token)
+    return frozenset(found)
+
+
+def _page_words(index: Index, url: str) -> frozenset[str]:
+    """Every word of a page's passages (and their page context)."""
+    pages = index.cached("page_words", dict)
+    if url not in pages:
+        prose = index.cached("prose_by_url", lambda: _group_by_url(b for b in index.blocks if not b.is_row))
+        pages[url] = frozenset().union(*(block_words(b) for b in prose.get(url, ())))
+    return pages[url]
 
 
 def _shows_rate(block: Block) -> bool:
@@ -298,6 +354,8 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     hits = index.search(with_aliases(index, q.query), CANDIDATES, rows_only)
     required = _without_framing_words(index, required, hits)
     entities = _entities(index, q.raw)
+    place_names = _lowercase_entities(index, q.raw, entities)
+    wants_phone = {"phone", "number"} <= set(q.query) or "telephone" in q.query
     codes = [t for t in required if _CODE.match(t)]  # "CHECK500": a code named in the question must be in the block
     existence = bool(_EXISTENCE.search(q.raw))
     wants_fee = bool({"fee", "cost", "charge"} & set(q.query))
@@ -312,10 +370,14 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
             continue
         if not (block.links if wants_link else has_asked_value(q.query, block)):
             continue
+        if wants_phone and phone_in(block.text):
+            factor *= PHONE_FACTOR  # "phone number of ...": the line that holds a number to dial
         if codes and not set(codes) <= block_words(block):
             continue
         if entities and not entities <= block_words(block):
             continue  # "Platteville": a passage about another place does not answer
+        if place_names and not place_names <= block_words(block) and not place_names <= _page_words(index, block.url):
+            continue  # "cedar rapids" typed in lower case: the page must be about that place
         if existence and (coverage(index, topic_required, block) < 1.0):
             continue  # "does Dupaco have X": a block that lacks part of X does not show Dupaco has it
         if wants_amount and not _MONEY_OR_PERCENT.search(block.text):
@@ -633,6 +695,189 @@ def with_body(index: Index, blocks: list[Block], question: str = "") -> list[Blo
         result.append(index.blocks[best])
         asks_phone = not question or bool(_PHONE_WORDS.intersection(asked))
         result.extend(b for b in _body_after(index.blocks, best, continues) if b not in blocks and (asks_phone or not phone_in(b.text)))
+    return result
+
+
+_FAQ_QUESTION = re.compile(r"^(?:[^:\n]{1,80}:{1,2} )?- [^\n]{3,200}\?$")
+ANSWER_MAX_BLOCKS = 6  # a list of requirements runs over several lines
+ANSWER_MAX_CHARS = 800
+
+
+def _positions(index: Index) -> dict[int, int]:
+    return index.cached("positions", lambda: {id(b): i for i, b in enumerate(index.blocks)})
+
+
+def with_answer(index: Index, blocks: list[Block]) -> list[Block]:
+    """A frequently-asked question printed as a line of its own ("- How do I ...?") is followed by
+    its answer: the lines under it with its label, up to the next question."""
+    positions = _positions(index)
+    answers: dict[int, list[Block]] = {}
+    for block in blocks:
+        if block.is_row or not _FAQ_QUESTION.match(block.text) or id(block) not in positions:
+            continue
+        taken, size = [], 0
+        label = _label(block.text) if block.text.find(": - ") > 0 else None  # the answer lines carry the question's label
+        for follower in index.blocks[positions[id(block)] + 1:positions[id(block)] + 1 + ANSWER_MAX_BLOCKS]:
+            if label is None:
+                label = _label(follower.text)
+            if (follower.url != block.url or follower.is_row or _FAQ_QUESTION.match(follower.text) or size + len(follower.text) > ANSWER_MAX_CHARS
+                    or _label(follower.text) != label):
+                break
+            taken.append(follower)
+            size += len(follower.text)
+        answers[id(block)] = taken
+    if not answers:
+        return blocks
+    placed = {id(b) for taken in answers.values() for b in taken}  # shown under their question, not where they were found
+    result: list[Block] = []
+    for block in blocks:
+        if id(block) in placed:
+            continue
+        result.append(block)
+        result.extend(b for b in answers.get(id(block), ()) if b not in result)
+    return result
+
+
+def complete_blocks(index: Index, blocks: list[Block], question: str, shapes: list[re.Pattern] = ()) -> list[Block]:
+    """The passages to show: the chosen blocks, trimmed to the question, each with what belongs with it
+    (the paragraph under a heading, the answer under a question, the rest of its section, the release
+    behind a teaser, the phone line of a release, the steps of an offer)."""
+    blocks = with_body(index, trim_blocks(index, blocks, question), question)
+    blocks = with_full_text(index, with_section(index, blocks, question))
+    blocks = with_value_line(index, blocks, question, shapes)
+    blocks = with_steps(index, with_answer(index, with_contact(index, blocks, question)), question)
+    return list({block.text: block for block in blocks}.values())  # a line found twice is shown once
+
+
+VALUE_LINE_REACH = 8  # lines under a headline searched for the one that shows the asked value
+
+
+def with_value_line(index: Index, blocks: list[Block], question: str, shapes: list[re.Pattern]) -> list[Block]:
+    """A headline followed by its opening paragraphs may leave out the line that holds the asked kind
+    of value (the date a branch closes comes a few lines down): the first following line that shows it
+    and talks about the question joins."""
+    if not shapes or not blocks:
+        return blocks
+    q = _question(question)
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = sorted({t for t in q.query if t not in skipped and t not in FRAMING_WORDS and not any(c.isdigit() for c in t)})
+    positions = _positions(index)
+    result = list(blocks)
+    for block in blocks:
+        if block.is_row or id(block) not in positions or any(shape.search(b.text) for b in blocks if b.url == block.url for shape in shapes):
+            continue
+        last = max(positions.get(id(b), -1) for b in blocks if b.url == block.url)
+        for follower in index.blocks[last + 1:last + 1 + VALUE_LINE_REACH]:
+            if follower.url != block.url or follower.is_row:
+                break
+            if any(shape.search(follower.text) for shape in shapes) and (not required or any(is_present(index, t, follower) for t in required)):
+                result.insert(result.index(max((b for b in blocks if b.url == block.url), key=lambda b: positions.get(id(b), -1))) + 1, follower)
+                break
+    return result
+
+
+TEASER_KEY_CHARS = 60
+_NOT_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def _opening_key(text: str) -> str:
+    """The first letters and digits of a passage, whatever its punctuation or markup."""
+    return _NOT_ALNUM.sub("", text.lower())[:TEASER_KEY_CHARS]
+
+
+def with_full_text(index: Index, blocks: list[Block]) -> list[Block]:
+    """A listing page quotes the start of each release and ends it with "...": the release itself
+    (same opening, longer) is the passage to answer from."""
+    if not any(b.text.endswith("...") for b in blocks):
+        return blocks
+    full = index.cached("teaser_sources", lambda: _opening_index(index))
+    result = []
+    for block in blocks:
+        if block.text.endswith("...") and not block.is_row:
+            longer = [b for b in full.get(_opening_key(block.text), ()) if len(b.text) > len(block.text)]
+            if longer:
+                block = max(longer, key=lambda b: (len(b.text), b.url))
+        if block not in result:
+            result.append(block)
+    return result
+
+
+def _opening_index(index: Index) -> dict[str, list[Block]]:
+    found: dict[str, list[Block]] = {}
+    for b in index.blocks:
+        if not b.is_row and len(b.text) > TEASER_KEY_CHARS and is_article(b.url):
+            found.setdefault(_opening_key(b.text), []).append(b)
+    return found
+
+
+_CALL_WORDS = frozenset({"phone", "telephone", "call"})
+
+
+def with_contact(index: Index, blocks: list[Block], question: str) -> list[Block]:
+    """A news release names the branch's address in its opening and gives the phone number lines
+    later; a "phone number" question answered by the opening gets the line that holds the number,
+    from the same release."""
+    q = _question(question)
+    if not _CALL_WORDS.intersection(q.query) or any(phone_in(b.text) for b in blocks):
+        return blocks
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, _CALL_WORDS, {"number", "contact"})
+    required = sorted({t for t in q.query if t not in skipped and not any(c.isdigit() for c in t)})
+    positions = _positions(index)
+    result = list(blocks)
+    for block in blocks:
+        if block.is_row or id(block) not in positions or not is_article(block.url):
+            continue
+        start = positions[id(block)]
+        # lines of the same release, nearest first; the one that holds a number and talks about the asked place
+        candidates = [b for b in index.blocks[max(0, start - 60):start + 60]
+                      if b.url == block.url and not b.is_row and len(b.text) <= 160 and phone_in(b.text)]
+        best = max(candidates, key=lambda b: (coverage(index, required, b), -abs(positions[id(b)] - start)), default=None)
+        if best is not None and best not in result and (not required or coverage(index, required, best) > 0):
+            result.insert(result.index(block) + 1, best)
+            break
+    return result
+
+
+SECTION_REACH = 3  # lines on either side of a chosen passage that can still belong to its section
+SECTION_MAX_ADDED = 3
+SECTION_STEPS = 2
+SECTION_NEW_WORDS = 2  # a neighbouring line joins when it covers this many question words the chosen lines miss...
+SECTION_RARE_IDF = 6.5  # ...or one word that is rare on the site
+_STEPS_QUESTION = re.compile(r"\bwhat (?:do|should|can) i do\b|\bhow (?:do|can|should) i\b|\bsteps?\b", re.I)
+
+
+def with_section(index: Index, blocks: list[Block], question: str) -> list[Block]:
+    """An article prints a section as several lines under one "Label:"; the line that ranked first may
+    hold only part of what was asked (the step, but not the phone number to call). Neighbouring lines
+    of the same section are added when they cover a question word the chosen lines do not."""
+    positions = _positions(index)
+    q = _question(question)
+    skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
+    required = sorted({t for t in q.query if t not in skipped and t not in FRAMING_WORDS and not any(c.isdigit() for c in t)})
+    if not required:
+        return blocks
+    steps = bool(_STEPS_QUESTION.search(question))  # "what do I do": the next lines of the section are the steps
+    result: list[Block] = []
+    for block in blocks:
+        group = [block]
+        label = _label(block.text)
+        if not block.is_row and label and len(label) <= 80 and id(block) in positions and not _FAQ_QUESTION.match(block.text):
+            at = positions[id(block)]
+            covered = {t for t in required if is_present(index, t, block)}
+            for step in (1, -1):  # outwards through the lines of the same section, no gaps
+                for pos in range(at + step, at + step * (SECTION_REACH + 1), step):
+                    if not 0 <= pos < len(index.blocks):
+                        break
+                    other = index.blocks[pos]
+                    if other.url != block.url or other.is_row or _label(other.text) != label or _FAQ_QUESTION.match(other.text):
+                        break
+                    if other in blocks or other in result or len(group) > SECTION_MAX_ADDED:
+                        continue
+                    new = {t for t in required if is_present(index, t, other)} - covered
+                    if len(new) >= SECTION_NEW_WORDS or any(index.idf(t) >= SECTION_RARE_IDF for t in new) or (steps and step == 1 and pos - at <= SECTION_STEPS):
+                        covered |= new
+                        group.append(other)
+        result.extend(sorted(group, key=lambda b: positions.get(id(b), 0)))
     return result
 
 

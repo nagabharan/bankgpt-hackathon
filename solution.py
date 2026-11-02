@@ -9,6 +9,7 @@ in sys.modules, which breaks dataclasses under `from __future__ import annotatio
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -17,9 +18,9 @@ from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
 from evidence import kind_for
-from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, duration_notes, focused_lines, links_of, select_blocks, trim_blocks, with_body, with_steps
+from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, complete_blocks, duration_notes, focused_lines, links_of, select_blocks
 from pressfacts import answer_from_facts, sentence_for
-from sentences import better_than, select_sentences
+from sentences import asked_shapes, better_than, select_sentences
 from qualifiers import parse_question
 from schedules import asks_schedules
 from textnorm import clean, content_tokens, normalize_question
@@ -54,6 +55,9 @@ def iso_date(as_of: Optional[str]) -> Optional[str]:
         except ValueError:
             continue
     return None
+
+
+_WHEN = re.compile(r"^\W*when\b|\bwhen (?:did|do|does|is|was|will|can|should)\b|\bwhat (?:date|day)\b", re.I)  # a date is looked for further down the page
 
 
 class KnowledgeBase:
@@ -109,7 +113,7 @@ class KnowledgeBase:
             return Answer(text=NOT_LISTED, confident=False)  # a year after the newest crawl cannot be on the site
         if blocks[0].expired:  # the only match is an ended offer: do not present its terms as a live deal
             return Answer(text=OFFER_ENDED, confident=False)
-        blocks = with_steps(view.index, with_body(view.index, trim_blocks(view.index, blocks, question), question), question)
+        blocks = complete_blocks(view.index, blocks, question, asked_shapes(question) if _WHEN.search(question) else [])
         lines = focused_lines(view.index, blocks, question) + duration_notes(view.index, blocks, question)
         if asks_for_link(question):
             lines += links_of(blocks)

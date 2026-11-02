@@ -172,14 +172,14 @@ def strip_links(text: str) -> tuple[str, list[str]]:
 
 
 # Street words the site abbreviates ("3999 Pennsylvania Ave.", "Saratoga Rd."): one form for both spellings.
-_STREET_ABBREVIATIONS = {"avenue": "ave", "road": "rd", "boulevard": "blvd", "highway": "hwy", "street": "st", "drive": "dr"}
+STREET_ABBREVIATIONS = {"avenue": "ave", "road": "rd", "boulevard": "blvd", "highway": "hwy", "street": "st", "drive": "dr"}
 
 
 @lru_cache(maxsize=1 << 16)  # millions of calls at ingest over a vocabulary of tens of thousands
 def stem(token: str) -> str:
     """Crude plural folding so 'months' matches 'month' and 'branches' matches 'branch'."""
-    if token in _STREET_ABBREVIATIONS:
-        return _STREET_ABBREVIATIONS[token]
+    if token in STREET_ABBREVIATIONS:
+        return STREET_ABBREVIATIONS[token]
     if len(token) <= 3 or not token.endswith("s") or token.endswith(("ss", "us", "is")):
         return token
     if token.endswith(("ches", "shes", "xes", "sses")):
