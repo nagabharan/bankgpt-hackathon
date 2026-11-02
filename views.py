@@ -10,6 +10,7 @@ from bm25 import Index
 from blocks import Block, parse_page
 from contract import Snapshot
 from expiry import is_expired, page_looks_expired
+from facts import warm_facts
 from matching import warm
 from pressfacts import DatedFact, dated_facts
 from segments import page_prior
@@ -62,6 +63,7 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     index.acronyms = acronyms_defined(texts, index)
     sentences = build_sentence_index(kept, index.page_prior, index.acronyms)
     warm(index)
+    warm_facts(index)
     return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins, sentences)
 
 

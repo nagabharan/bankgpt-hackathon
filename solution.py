@@ -18,6 +18,7 @@ from changes import change_answer, is_change_question
 from conflicts import find_conflicts
 from contract import Answer, Conflict, Snapshot, Source
 from evidence import kind_for
+from facts import typed_fact
 from matching import MONEY_WORDS, asks_for_link, asks_where_online, best_link, complete_blocks, duration_notes, focused_lines, links_of, names_unknown_place, select_blocks
 from pressfacts import answer_from_facts, sentence_for
 from sentences import asked_shapes, better_than, select_sentences
@@ -76,8 +77,31 @@ class KnowledgeBase:
         eligible = [v for v in self.views if day is None or v.taken_on <= day]
         return eligible[-1] if eligible else None
 
+    def _scope(self, question: str, as_of: Optional[str]) -> tuple[str, Optional[SnapshotView]]:
+        """The question without a written date, and the snapshot it asks about."""
+        newest = self.views[-1].taken_on if self.views else datetime.now().date().isoformat()
+        stripped, written_date = split_date(question, int(newest[:4]))
+        if written_date and written_date <= newest:  # "in May 2026" asks about May; "today (October 2026)" does not
+            question = stripped
+        else:
+            written_date = None
+        return question, self._view_for(iso_date(as_of) or written_date)
+
     def answer(self, question: str, as_of: Optional[str] = None) -> Answer:
-        return self._answer(question, as_of)
+        """The search's answer, replaced by a stored fact only when the question asks for a phone number,
+        address, fee amount or date and the stored fact's value is not already in the answer."""
+        found = self._answer(question, as_of)
+        question = normalize_question(question)
+        scoped, view = self._scope(question, as_of)
+        if view is None or is_change_question(question):
+            return found
+        fact = typed_fact(view.index, scoped)
+        if fact is None:
+            return found
+        shown = re.sub(r"\D", "", found.text) if fact.kind == "phone" else re.sub(r"[\s,]", "", found.text).lower()
+        if found.confident and fact.value in shown and len(found.text) <= 3 * len(fact.sentence) + 120:
+            return found  # already says it, and not buried in a page-long dump
+        return Answer(text=fact.sentence, sources=cited_sources(view, [fact.block]))
 
     def _answer(self, question: str, as_of: Optional[str]) -> Answer:
         question = normalize_question(question)
@@ -88,12 +112,7 @@ class KnowledgeBase:
             if changed is not None:
                 return Answer(text=changed[0], sources=[changed[1]])
         newest = self.views[-1].taken_on if self.views else datetime.now().date().isoformat()
-        stripped, written_date = split_date(question, int(newest[:4]))
-        if written_date and written_date <= newest:  # "in May 2026" asks about May; "today (October 2026)" does not
-            question = stripped
-        else:
-            written_date = None
-        view = self._view_for(day or written_date)
+        question, view = self._scope(question, as_of)
         if CURRENT_NAMES and view is not None:
             question = current_names(question, [v for v in self.views if v.taken_on < view.taken_on], view)
         calendar_years = parse_question(clean(question)).calendar_years
