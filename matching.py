@@ -36,6 +36,7 @@ ALIASES = {
     "cost": ("fee", "price"), "overdraw": ("overdraft",), "overdrawn": ("overdraft",), "charge": ("fee",),
     "mailing": ("box",), "become": ("join",), "qualify": ("qualifying", "qualified"), "open": ("opening", "opened"),
     "stop": ("close", "closing", "closure", "last"), "serving": ("service",),
+    "oversea": ("international", "foreign"), "expedited": ("rush",), "expedite": ("rush",),
     "bonus": ("promo", "offer", "special"), "reward": ("promo", "offer"), "earn": ("promo", "offer", "get"), "wallet": ("payment", "pay"),
     "office": ("branch",), "promotion": ("special",), "thru": ("up",), "refi": ("refinance",),
     "transit": ("routing",), "share": ("certificate",),  # share: coverage only (ALIAS_NO_SEARCH)
@@ -73,6 +74,38 @@ def _word_set(text: str) -> frozenset[str]:
     return frozenset(content_tokens(text))
 
 
+_SUFFIXES = ("ing", "ed", "ral", "al", "er", "ion", "ment", "ly", "e")
+
+
+@lru_cache(maxsize=1 << 16)
+def root(word: str) -> str:
+    """A word cut to a rough root so derived forms meet ("referring", "referral" and "refer";
+    "expedited" and "expedite"). Only used to decide whether a question word is present in a block."""
+    for suffix in _SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 5:
+            word = word[:-len(suffix)]
+            break
+    if len(word) > 5 and word[-1] == word[-2] and word[-1] not in "aeiou":
+        word = word[:-1]  # "referr" -> "refer"
+    return word
+
+
+@lru_cache(maxsize=1 << 15)
+def _root_set(text: str) -> frozenset[str]:
+    return frozenset(root(t) for t in content_tokens(text) if not t[0].isdigit())
+
+
+def block_roots(block: Block) -> frozenset[str]:
+    return _root_set(block.text) | _root_set(block.context)
+
+
+def is_present(index: Index, token: str, block: Block) -> bool:
+    """The question word is in the block: as written, through an alias, or as a derived form."""
+    present = block_words(block)
+    return (token in present or bool(present.intersection(aliases_of(index, token)))
+            or (not token[0].isdigit() and root(token) in block_roots(block)))
+
+
 def block_words(block: Block) -> frozenset[str]:
     """What the block is about: its own words plus its page's title, URL and headings."""
     return _word_set(block.text) | _word_set(block.context)
@@ -80,10 +113,9 @@ def block_words(block: Block) -> frozenset[str]:
 
 def coverage(index: Index, required: list[str], block: Block) -> float:
     """Fraction of the required tokens' idf mass that appears in the block (aliases count)."""
-    present = block_words(block)
     wanted = {t: index.idf(t) for t in sorted(set(required))}  # sorted: float sums stay hash-seed independent
     total = sum(wanted.values())
-    covered = sum(w for t, w in wanted.items() if t in present or present.intersection(aliases_of(index, t)))
+    covered = sum(w for t, w in wanted.items() if is_present(index, t, block))
     return covered / total if total else 0.0
 
 
@@ -94,8 +126,7 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
     if not words:
         return True
     anchor = max(sorted(set(words)), key=index.idf)
-    present = block_words(block)
-    return anchor in present or bool(present.intersection(aliases_of(index, anchor)))
+    return is_present(index, anchor, block)
 
 
 def aliases_of(index: Index, token: str) -> tuple[str, ...]:
@@ -161,6 +192,32 @@ def _question(question: str) -> Question:
                     wants_list(text, query) or wants_extreme)  # the extreme is picked from the rates of several products
 
 
+FRAMING_PROBE = 20  # best hits that must show a question word for it to count as part of the topic
+# Verbs and adverbs that only frame an ask ("what does it carry", "ways to avoid", "back then").
+FRAMING_WORDS = frozenset("""avoid carry cover load reply require describe recommend offered offer bring keep make come
+    brand then back past far late outside long directly people article limit""".split())
+_FRAMING_ENDINGS = ("ing", "ed", "ly")
+
+
+def _is_framing(word: str) -> bool:
+    return word in FRAMING_WORDS or (len(word) > 4 and word.endswith(_FRAMING_ENDINGS))
+
+
+def _without_framing_words(index: Index, required: list[str], hits: list[tuple[float, int]]) -> list[str]:
+    """Question words that only frame the ask ("looking", "load", "carry", "avoid") are used elsewhere on
+    the site but by none of the best hits; they should not veto a block that has every other topic word.
+    Names (nouns) are never dropped, nor is a word the site never uses: the question names something that is
+    not there. At least half of the words, never fewer than two, are kept."""
+    if len(required) < 3:
+        return required
+    best = [index.blocks[doc_id] for _, doc_id in hits[:FRAMING_PROBE]]
+    framing = [t for t in sorted(set(required))
+               if _is_framing(t) and index.document_frequency(t) > 0 and not any(is_present(index, t, b) for b in best)]
+    if not framing or len(framing) > len(required) // 2:
+        return required
+    return [t for t in required if t not in framing]
+
+
 def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float, int]]:
     """(score, doc_id) for the searched blocks that answer the question, best first."""
     wants_link = bool(LINK_WORDS.intersection(q.query))
@@ -169,10 +226,12 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     required = [t for t in q.query if t not in skipped and not (wants_amount and t == "amount")]
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
+    hits = index.search(with_aliases(index, q.query), CANDIDATES, rows_only)
+    required = _without_framing_words(index, required, hits)
     existence = bool(_EXISTENCE.search(q.raw))
     topic_required = [t for t in required if t != "dupaco"]
     scored = []
-    for score, doc_id in index.search(with_aliases(index, q.query), CANDIDATES, rows_only):
+    for score, doc_id in hits:
         block = index.blocks[doc_id]
         factor = q.info.fit(block, ignore_tiers=q.several)
         if q.asks_money and page_type(block.url) == "calculator":
@@ -262,10 +321,14 @@ _PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|di
 _STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
 
 
+_BONUS_ROOTS = frozenset({"refer", "bonus", "reward", "promo", "promotion", "gift", "cashback"})
+
+
 def with_implied_words(text: str, query: list[str]) -> list[str]:
     """Add the word a wording implies: "what does it pay?" or a stated percent asks for a rate,
     "when is it open?" for hours."""
-    extra = (["rate"] if (_PAYS.search(text) or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) else [])
+    bonus = any(root(t) in _BONUS_ROOTS for t in query)  # "how much can I earn by referring a friend" asks for an amount
+    extra = (["rate"] if (_PAYS.search(text) or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) and not bonus else [])
     extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
     return query + extra
 
