@@ -72,7 +72,7 @@ def coverage(index: Index, required: list[str], block: Block) -> float:
     present = block_words(block)
     wanted = {t: index.idf(t) for t in sorted(set(required))}  # sorted: float sums stay hash-seed independent
     total = sum(wanted.values())
-    covered = sum(w for t, w in wanted.items() if t in present or present.intersection(ALIASES.get(t, ())))
+    covered = sum(w for t, w in wanted.items() if t in present or present.intersection(aliases_of(index, t)))
     return covered / total if total else 0.0
 
 
@@ -84,11 +84,16 @@ def has_anchor(index: Index, required: list[str], block: Block) -> bool:
         return True
     anchor = max(sorted(set(words)), key=index.idf)
     present = block_words(block)
-    return anchor in present or bool(present.intersection(ALIASES.get(anchor, ())))
+    return anchor in present or bool(present.intersection(aliases_of(index, anchor)))
 
 
-def with_aliases(query: list[str]) -> list[str]:
-    return query + [alias for t in query if t not in ALIAS_NO_SEARCH for alias in ALIASES.get(t, ())]
+def aliases_of(index: Index, token: str) -> tuple[str, ...]:
+    """Fixed aliases, else the words an acronym the site defines stands for (HSA, HELOC)."""
+    return ALIASES.get(token) or index.acronyms.get(token, ())
+
+
+def with_aliases(index: Index, query: list[str]) -> list[str]:
+    return query + [alias for t in query if t not in ALIAS_NO_SEARCH for alias in aliases_of(index, t)]
 
 
 def has_asked_value(query: list[str], block: Block) -> bool:
@@ -152,7 +157,7 @@ def _qualifying(index: Index, q: Question, rows_only: bool) -> list[tuple[float,
     topic_words = {t for t in required if not any(c.isdigit() for c in t)}
 
     scored = []
-    for score, doc_id in index.search(with_aliases(q.query), CANDIDATES, rows_only):
+    for score, doc_id in index.search(with_aliases(index, q.query), CANDIDATES, rows_only):
         block = index.blocks[doc_id]
         factor = q.info.fit(block, ignore_tiers=q.several)
         if q.asks_money and page_type(block.url) == "calculator":
@@ -209,7 +214,7 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
     skipped = q.info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, kind.filler)
     required = [t for t in q.query if t not in skipped]
     found = []
-    for score, doc_id in index.search(with_aliases(q.query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
+    for score, doc_id in index.search(with_aliases(index, q.query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
         block = index.blocks[doc_id]
         if (kind.shows(block.text) and q.info.fit(block) and (not required or coverage(index, required, block) >= kind.min_coverage)
                 and has_anchor(index, required, block)
@@ -233,11 +238,13 @@ def _by_evidence(index: Index, kind: Kind, q: Question) -> list[Block]:
 
 # Wordings that ask for a rate or for opening hours without saying so.
 _PAYS = re.compile(r"\b(?:how much|what)\b[^?]*\b(?:pay|pays|earn|earns|yield|dividends?)\b|\bwhat do(?:es)? [^?]*\b(?:pay|earn)\b", re.I)
+_STATED_PERCENT = re.compile(r"\d(?:\.\d+)?\s*%")  # "only 6%?", "paying 4.5%": the question is about a rate
 
 
 def with_implied_words(text: str, query: list[str]) -> list[str]:
-    """Add the word a wording implies: "what does it pay?" asks for a rate, "when is it open?" for hours."""
-    extra = (["rate"] if _PAYS.search(text) and not MONEY_WORDS.intersection(query) else [])
+    """Add the word a wording implies: "what does it pay?" or a stated percent asks for a rate,
+    "when is it open?" for hours."""
+    extra = (["rate"] if (_PAYS.search(text) or _STATED_PERCENT.search(text)) and not MONEY_WORDS.intersection(query) else [])
     extra += (["hour"] if OPENING.search(text) and "hour" not in query else [])
     return query + extra
 
@@ -270,6 +277,8 @@ def select_blocks(index: Index, question: str) -> list[Block]:
         group = [d for d in same_kind if blocks[d].figures or not q.asks_money]  # a rate list holds rows with a rate
     else:
         group = [d for d in same_kind if blocks[d].url == best.url and blocks[d].freshness == best.freshness]
+    if q.info.amounts:  # a named balance or loan size picks one amount tier; the wider tiers are other facts
+        group = [d for d in group if fit(d) >= round(q.info.fit(best, q.several), 1)]
     kept = group[:MAX_LIST_BLOCKS if q.several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
     return list({block.text: block for block in unique}.values())  # identical rows on two pages count once

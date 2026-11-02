@@ -37,7 +37,9 @@ STOPWORDS = frozenset(
     "that the there this to what when where which who with you your "
     # question filler that carries no topic
     "about any between correct current currently could did from general get give have has its keep know last like located m re ve ll d t going still new financed finance buy if into over under per bought purchased "
-    "many may much need now please provide right same their them they today want was were would".split()
+    "many may much need now please provide right same their them they today want was were would "
+    # contraction stubs ("isn't" -> "isn") and premise wording ("why is it only 4.1%?") carry no topic
+    "isn aren doesn didn don wasn weren hasn haven why only really true actually".split()
 )
 
 # "six month", "sixty-month", "twenty four months" -> "6 month", "60 month", "24 months".

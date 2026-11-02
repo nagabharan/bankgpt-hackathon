@@ -1,6 +1,7 @@
 """One searchable view per crawl snapshot."""
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, replace
 
@@ -10,7 +11,7 @@ from contract import Snapshot
 from expiry import is_expired, page_looks_expired
 from pressfacts import DatedFact, dated_facts
 from segments import page_prior
-from textnorm import clean
+from textnorm import STOPWORDS, clean, content_tokens, strip_links
 
 # A block repeated on this many pages is site chrome (forms, country lists), not an answer.
 BOILERPLATE_MIN_PAGES = 8
@@ -35,12 +36,14 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     blocks: list[Block] = []
     pages_per_text: dict[str, set[str]] = defaultdict(set)
     facts: list[DatedFact] = []
+    texts: list[str] = []  # every page's cleaned text, navigation included: where acronyms get spelled out
     for page in snapshot.pages:
         url = canonical_url(page.url)
         if url in seen:
             continue
         seen.add(url)
         cleaned = clean(page.markdown)  # the costliest step of ingest: once per page
+        texts.append(cleaned)
         facts += dated_facts(url, cleaned)
         page_expired = page_looks_expired(url, page.title)
         for block in parse_page(url, page.markdown, page.title, cleaned):
@@ -52,6 +55,7 @@ def build_view(snapshot: Snapshot) -> SnapshotView:
     twins = {text: tuple(sorted(urls)) for text, urls in pages_per_text.items() if 1 < len(urls) < BOILERPLATE_MIN_PAGES}
     index = Index(kept)
     index.page_prior = _page_priors(blocks, seen)
+    index.acronyms = acronyms_defined(texts, index)
     return SnapshotView(snapshot.snapshot_id, snapshot.taken_on, index, facts, twins)
 
 
@@ -64,3 +68,33 @@ def _page_priors(blocks: list[Block], pages: set[str]) -> dict[str, float]:
             if target in pages and target != block.url:
                 linked_from[target].add(block.url)
     return {url: page_prior(url, len(linked_from.get(url, ()))) for url in pages}
+
+
+# "Home Equity Line of Credit (HELOC)", "Health Savings (HSA)": an acronym the site spells out once.
+_ACRONYM_DEFINITION = re.compile(r"((?:[A-Za-z][\w'-]*\s+){1,7})\(([A-Z]{2,6})\)")
+ACRONYM_MAX_BLOCKS = 100  # an acronym the site itself uses widely (PIN, APR) needs no expansion
+
+
+def _spelled_out(words: list[str], acronym: str) -> list[str]:
+    """The shortest run of trailing words whose initials spell the acronym, or spell all but its
+    last letter ("Health Savings (HSA)"); [] when none does."""
+    for start in range(len(words) - 1, -1, -1):
+        initials = "".join(w[0] for w in words[start:]).upper()
+        if initials == acronym or (len(initials) >= 2 and acronym[:-1] == initials):
+            return words[start:]
+        if len(initials) > len(acronym):
+            break
+    return []
+
+
+def acronyms_defined(texts: list[str], index: Index) -> dict[str, tuple[str, ...]]:
+    """acronym token -> the words it stands for, for acronyms the blocks rarely use on their own."""
+    found: dict[str, tuple[str, ...]] = {}
+    for text in texts:
+        for words, acronym in _ACRONYM_DEFINITION.findall(strip_links(text)[0]):
+            expansion = tuple(t for t in content_tokens(" ".join(_spelled_out(words.split(), acronym))) if t not in STOPWORDS)
+            token = acronym.lower()
+            if len(expansion) >= 2 and token not in found and token not in STOPWORDS \
+                    and index.document_frequency(token) <= ACRONYM_MAX_BLOCKS:
+                found[token] = expansion
+    return found

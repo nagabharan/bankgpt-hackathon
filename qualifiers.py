@@ -25,6 +25,7 @@ EXCEPTIONAL_TIER_FACTOR = 0.2
 WRONG_TIER_FACTOR = 0.5  # block names a tier the question did not ask for
 MISSING_TIER_FACTOR = 0.3  # question names a tier the block lacks
 NO_YEAR_RANGE_FACTOR = 0.5  # question gives a model year but the block has no year range
+CONDITION_WORDS = frozenset({"used", "new", "older"})
 
 
 # Caption words that name no product, so sharing them proves nothing.
@@ -59,7 +60,7 @@ def year_spans_in(text: str) -> list[tuple[int, int]]:
     spans = [(0, int(year)) for year in _OLDER.findall(text)]  # "2016 Model Year (and older)" = up to 2016
     for lo, hi in YEAR_SPAN.findall(text):
         hi_year = int(hi) if len(hi) == 4 else int(lo[:2] + hi)
-        spans.append((int(lo), hi_year))
+        spans.append((min(int(lo), hi_year), max(int(lo), hi_year)))  # "Model Year 2026-23" runs newest first
     return spans
 
 
@@ -67,10 +68,18 @@ _MONTH_NAME = re.compile(r"\b(January|February|March|April|June|July|August|Sept
 _ASSERTED_NUMBER = re.compile(r"\b(\d+(?:\.\d+)?)(?=%)|\b(\d{6,})\b")
 _MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
 # Amount tiers: "$10000 - $24999.99", "$25000+", "$300000 or less".
-_AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")
+_AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$?(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")  # "$10000-24999" too
 CALENDAR_MATCH_FACTOR = 1.3  # block's page is dated in the calendar year the question names
 CALENDAR_OTHER_FACTOR = 0.85
 NO_AMOUNT_BAND_FACTOR = 0.2  # every amount in the question lies outside the block's amount tiers
+TIGHTNESS_EXPONENT = 0.1
+TIGHTNESS_FLOOR = 0.5
+
+
+def band_tightness(amount: float, lo: float, hi: float) -> float:
+    """Near 1 when the amount sits at the band's bound, lower for a wide band ("$832,750 or less")."""
+    ratio = amount / hi if 0 < hi < float("inf") else (lo / amount if lo > 0 else 1.0)
+    return max(ratio, TIGHTNESS_FLOOR) ** TIGHTNESS_EXPONENT  # floor: a small balance in the lowest tier is no misfit
 
 
 def amount_bands_in(text: str) -> list[tuple[float, float]]:
@@ -116,6 +125,8 @@ class QuestionInfo:
             bands = amount_bands_in(block.text)
             if bands and not all(any(lo <= a <= hi for lo, hi in bands) for a in self.amounts):
                 factor *= NO_AMOUNT_BAND_FACTOR
+            elif bands:  # "$100,000 or less" fits a $90,000 loan better than "$832,750 or less" does
+                factor *= min(max(band_tightness(a, lo, hi) for lo, hi in bands if lo <= a <= hi) for a in self.amounts)
         block_tiers = tier_words_in(block.text)
         if ignore_tiers:  # a list wants every ordinary tier, but not a one-off program's rate
             return factor * EXCEPTIONAL_TIER_FACTOR ** len((block_tiers & EXCEPTIONAL_TIERS) - self.tiers)
@@ -151,6 +162,8 @@ def parse_question(text: str) -> QuestionInfo:
         consumed.update((number, stem(unit.lower())))
     years, calendar_years = split_years(text)
     consumed.update(str(y) for y in (*years, *calendar_years))
+    if years:  # the model year already says how new the vehicle is
+        consumed.update(CONDITION_WORDS)
     consumed.update(m.lower() for m in _MONTH_NAME.findall(text))  # a month is a date qualifier, not a topic word
     consumed.update(n for pair in _ASSERTED_NUMBER.findall(text) for n in pair if n)  # a stated percent or long number is a claim
     raw_amounts = _MONEY_AMOUNT.findall(text)

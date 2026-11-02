@@ -40,7 +40,11 @@ class Index:
         self._avg_length = (sum(self._lengths) / len(blocks)) if blocks else 0.0
         self._cache: dict[str, object] = {}
         self.page_prior: dict[str, float] = {}  # url -> prior, set by the view that owns this index
+        self.acronyms: dict[str, tuple[str, ...]] = {}  # acronym -> words it stands for, set by the view
         self.phone_counts: Counter = Counter(p for p in (phone_in(b.text) for b in blocks) if p)  # the main line is repeated
+
+    def document_frequency(self, token: str) -> int:
+        return self._text_df.get(token, 0)
 
     def idf(self, token: str) -> float:
         df = self._text_df.get(token, 0)
