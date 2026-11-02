@@ -6,6 +6,7 @@ import re
 
 from bm25 import Index
 from blocks import Block
+from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
@@ -154,10 +155,39 @@ def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tupl
             if not index.blocks[d].effective or index.blocks[d].effective == newest[fact_key(index.blocks[d])]]
 
 
+EVIDENCE_CANDIDATES = 1000
+EVIDENCE_POOL = 10  # passing candidates compared when picking the best
+
+
+def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str]) -> list[Block]:
+    """The best block that shows the evidence this kind of question needs, else none."""
+    skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, kind.filler)
+    required = [t for t in query if t not in skipped]
+    found = []
+    for score, doc_id in index.search(with_aliases(query), EVIDENCE_CANDIDATES, only=index.showing(kind.name, kind.shows)):
+        block = index.blocks[doc_id]
+        if (kind.shows(block.text) and info.fit(block) and coverage(index, required, block) >= kind.min_coverage
+                and has_anchor(index, required, block)
+                and not (kind.skip_articles and any(part in block.url for part in ARTICLE_PATHS))):
+            found.append((score, block))
+            if len(found) == EVIDENCE_POOL:
+                break
+    if not found:
+        return []
+    if kind.name == "phone":  # among the matches, the number that is everywhere is the main line
+        return [max(found, key=lambda sb: (index.phone_counts[phone_in(sb[1].text)], sb[0]))[1]]
+    return [found[0][1]]
+
+
 def select_blocks(index: Index, question: str) -> list[Block]:
     """The best block plus its siblings (same page, date and kind) that belong in the answer."""
     text = clean(question)
     query = content_tokens(text)
+    kind = kind_for(question)
+    if kind is not None and not MONEY_WORDS.intersection(query):
+        found = _by_evidence(index, kind, parse_question(text), query)
+        if found:
+            return found
     several = wants_list(text, query)
     scored = _score_candidates(index, parse_question(text), query, several)
     if not scored:
