@@ -8,6 +8,7 @@ from bm25 import Index
 from blocks import Block
 from evidence import Kind, kind_for, phone_in
 from qualifiers import QuestionInfo, fact_key, parse_question
+from segments import intent_of, segment_factor
 from textnorm import MONEY_MARK, clean, content_tokens, plural_nouns
 
 CANDIDATES = 100  # wide enough that table rows survive the prose that mentions the same words
@@ -111,8 +112,8 @@ def wants_list(text: str, query: list[str]) -> bool:
     return bool(LIST_WORDS.intersection(query)) or bool(plural_nouns(text) - PLURAL_EXEMPT)
 
 
-def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: bool,
-                rows_only: bool) -> list[tuple[float, int]]:
+def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: bool, rows_only: bool,
+                intent: str) -> list[tuple[float, int]]:
     """(score, doc_id) for the searched blocks that answer the question, best first."""
     wants_link = bool(LINK_WORDS.intersection(query))
     skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
@@ -126,20 +127,21 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
-        scored.append((score * factor, doc_id))
+        scored.append((score * factor * segment_factor(intent, block.url), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
 
-def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool) -> list[tuple[float, int]]:
+def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool,
+                      intent: str) -> list[tuple[float, int]]:
     """A question about a rate, fee or price is answered by a table row when one qualifies;
     otherwise (or for hours, policies) by any block, which may state the rate in prose."""
     if not MONEY_WORDS.intersection(query):
-        return _drop_superseded(index, _qualifying(index, info, query, several, rows_only=False))
-    rows = _qualifying(index, info, query, several, rows_only=True)
+        return _drop_superseded(index, _qualifying(index, info, query, several, False, intent))
+    rows = _qualifying(index, info, query, several, True, intent)
     if rows:
         return _drop_superseded(index, rows)
-    prose = _qualifying(index, info, query, several, rows_only=False)  # a rate stated in a sentence
+    prose = _qualifying(index, info, query, several, False, intent)  # a rate stated in a sentence
     return [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
 
 
@@ -159,7 +161,7 @@ EVIDENCE_CANDIDATES = 1000
 EVIDENCE_POOL = 10  # passing candidates compared when picking the best
 
 
-def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str]) -> list[Block]:
+def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str], intent: str) -> list[Block]:
     """The best block that shows the evidence this kind of question needs, else none."""
     skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS, kind.filler)
     required = [t for t in query if t not in skipped]
@@ -169,14 +171,14 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str])
         if (kind.shows(block.text) and info.fit(block) and coverage(index, required, block) >= kind.min_coverage
                 and has_anchor(index, required, block)
                 and not (kind.skip_articles and any(part in block.url for part in ARTICLE_PATHS))):
-            found.append((score, block))
+            found.append((score * segment_factor(intent, block.url), block))
             if len(found) == EVIDENCE_POOL:
                 break
     if not found:
         return []
     if kind.name == "phone":  # among the matches, the number that is everywhere is the main line
         return [max(found, key=lambda sb: (index.phone_counts[phone_in(sb[1].text)], sb[0]))[1]]
-    return [found[0][1]]
+    return [max(found, key=lambda sb: sb[0])[1]]
 
 
 def select_blocks(index: Index, question: str) -> list[Block]:
@@ -184,12 +186,13 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     text = clean(question)
     query = content_tokens(text)
     kind = kind_for(question)
+    intent = intent_of(question, bool(MONEY_WORDS.intersection(query)))
     if kind is not None and not MONEY_WORDS.intersection(query):
-        found = _by_evidence(index, kind, parse_question(text), query)
+        found = _by_evidence(index, kind, parse_question(text), query, intent)
         if found:
             return found
     several = wants_list(text, query)
-    scored = _score_candidates(index, parse_question(text), query, several)
+    scored = _score_candidates(index, parse_question(text), query, several, intent)
     if not scored:
         return []
     top = scored[0][0]

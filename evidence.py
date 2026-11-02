@@ -30,8 +30,12 @@ class Kind(NamedTuple):
     skip_articles: bool  # blogs and press releases are not where this fact is stated
 
 
+_SERVICE_AREA = re.compile(r"\b(?:live|work|serve[sd]?|serving|find us|located|locations?|branch\w*|count(?:y|ies)|charter|operate\w*)\b", re.I)
+
+
 def _shows_places(text: str) -> bool:
-    return len(set(_STATE_WORD.findall(text))) >= 2
+    """Two or more states, said in the way a service area is described (not a bio that mentions a hometown)."""
+    return len(set(_STATE_WORD.findall(text))) >= 2 and bool(_SERVICE_AREA.search(text))
 
 
 KINDS = (
