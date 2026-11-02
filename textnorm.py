@@ -76,17 +76,37 @@ def clean(text: str) -> str:
     return _SYMBOL_SPACE.sub(r"\1", text)
 
 
+# Chat filler of a question (dropped from questions only: these words also occur in page text).
+_QUESTION_FILLER = re.compile(r"\b(?:but|still|also|put|newest|latest|newer|big|bracket|pls|plz|thx|thanks|hey|hi|hello|yo|okay|btw|lol|asap|anyway|honestly|basically|kinda|sorta|ish|roughly|approx|approximately|around(?!\s+(?:"+"|".join(MONTHS)+r"))|throw|toss|stick|sits|sit|ahead|better|kid|kids)\b[,.!]?\s*", re.I)
+
 # Casual wording of a question, folded to the words the site uses. Applied to questions only.
 _CASUAL_WORDS = (
     (re.compile(r"\bcerts?\b", re.I), "certificate"),
     (re.compile(r"\bmos?\b", re.I), "months"),
     (re.compile(r"\byrs?\b", re.I), "years"),
     (re.compile(r"\bu\b", re.I), "you"),
+    (re.compile(r"\bcds?\b(?!\s*[/)(,]*\s*(?:or\s+)?certificates?\b)(?<!certificate\s\()(?<!certificate\s)", re.I), "certificate"),  # "CD / certificate" already says it
+    (re.compile(r"\bmax\b\.?", re.I), "maximum"),
+    (re.compile(r"\b(?:harley(?:[- ]davidson)?|yamaha|kawasaki|ducati|triumph|vespa|scooter|moped|dirt ?bike|sportbike|cruiser|chopper)s?\b", re.I), "motorcycle"),
+    (re.compile(r"\b(?:civic|accord|camry|corolla|prius|altima|sentra|mustang|corvette|wrangler|jeep|tesla|f-?150|silverado|tacoma|tundra|ram|rav4|cr-?v|explorer|equinox|malibu|impala|fusion|focus|elantra|sonata|outback|forester|mazda|subaru|toyota|honda|ford|chevy|chevrolet|dodge|nissan|hyundai|kia|bmw|audi|lexus|volkswagen|vw|buick|cadillac|gmc)s?\b", re.I), "car"),
     (re.compile(r"\bacct\b", re.I), "account"),
     (re.compile(r"\bmin\b\.?", re.I), "minimum"),
     (re.compile(r"\b(?:suv|pickup|pick-up|truck|sedan|minivan|van|crossover|coupe|hatchback|wagon)s?\b", re.I), "car"),
     (re.compile(r"\b(\d+)(?=(?:yr|mo)s?\b)", re.I), r"\1 "),  # "30yr" -> "30 yr"
 )
+# "(up to 832,750)", "for 10000": a bare number after an amount word is dollars, unless it reads as a year
+# or a term ("for 60 months").
+_BARE_AMOUNT = re.compile(r"\b(up to|under|below|over|above|less than|more than|at least|at most|worth|for|of|with|about|have|has|had|deposit|borrow)\s+"
+                          r"(?<![$\d])(\d{1,3}(?:,\d{3})+|\d{4,})\b(?!\s*(?:%|-?\s*(?:month|mo\b|year|yr)))", re.I)
+
+
+def _dollars(match: re.Match) -> str:
+    digits = match.group(2)
+    if len(digits) == 4 and 1900 <= int(digits) <= 2100:
+        return match.group(0)  # a year
+    return f"{match.group(1)} ${digits}"
+
+
 _GRAND = re.compile(r"\$?\b(\d+(?:\.\d+)?)\s*(?:grand|k)\b", re.I)  # "35 grand", "5k"
 # "$5000 to $25000" / "5000-25000 balance": the tier that starts at the lower amount answers it.
 _AMOUNT_RANGE = re.compile(r"\$(\d+(?:\.\d+)?)\s*(?:to|-|and|through|thru)\s*\$?\d+(?:\.\d+)?")
@@ -136,9 +156,11 @@ def normalize_question(question: str) -> str:
     text = _YEAR_MODEL.sub(r"\1 model year", text)
     for pattern, replacement in _CASUAL_WORDS:
         text = pattern.sub(replacement, text)
+    text = _BARE_AMOUNT.sub(_dollars, text)
     text = _GRAND.sub(lambda m: f"${round(float(m.group(1)) * 1000)}", text)
     text = _AMOUNT_RANGE.sub(r"$\1", text)
-    return _YEAR_VEHICLE.sub(r"\1 model year ", text)
+    text = _YEAR_VEHICLE.sub(r"\1 model year ", text)
+    return _QUESTION_FILLER.sub("", text)
 
 
 def strip_links(text: str) -> tuple[str, list[str]]:

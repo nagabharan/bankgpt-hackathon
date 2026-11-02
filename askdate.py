@@ -10,9 +10,11 @@ from textnorm import MONTHS
 # A month needs a year or a preposition: a bare capitalised "May" is usually the verb ("May I apply?").
 # "since"/"from" are not here: they ask what changed, not what was true then.
 _DATE_PHRASE = re.compile(
-    rf"\b(?P<prep>(?:as of|in|during|on)\s+)?(?P<month>{'|'.join(MONTHS)})(?:\s+(?P<day>\d{{1,2}})(?:(?:st|nd|rd|th)\b|(?=,?\s+\d{{4}}\b)),?)?(?:\s+(?P<year>\d{{4}}))?\b")
+    rf"\b(?P<prep>(?:as of|in|during|on|around|by|at|for)\s+)?(?P<month>{'|'.join(MONTHS)})(?:\s+(?P<day>\d{{1,2}})(?:(?:st|nd|rd|th)\b|(?=,?\s+\d{{4}}\b)|(?!\s*-?\s*(?:month|mo\b|year|yr|day|week|%|percent|k\b|\d))),?)?(?:\s+(?P<year>\d{{4}}))?\b")
 # "2026-05-12" and "5/12/2026" name one day.
 _NUMERIC_DATE = re.compile(r"\b(?:(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2})|(?P<m2>\d{1,2})/(?P<d2>\d{1,2})/(?P<y2>\d{4}))\b")
+# "as of 6/9": a month/day with a date preposition and no year takes the default year.
+_SHORT_DATE = re.compile(r"\b(?:as of|on|around|by|since|for)\s+(?P<m>\d{1,2})/(?P<d>\d{1,2})\b(?![/\d])", re.I)
 
 
 # The last day of each season: "in spring" asks for what the site said by the end of May.
@@ -31,6 +33,10 @@ def split_date(question: str, default_year: int) -> tuple[str, Optional[str]]:
         if 1 <= month <= 12 and 1 <= day <= calendar.monthrange(year, month)[1]:
             stripped = (question[:numeric.start()] + question[numeric.end():]).replace("  ", " ").strip()
             return stripped, f"{year}-{month:02d}-{day:02d}"
+    short = _SHORT_DATE.search(question)
+    if short and 1 <= int(short.group("m")) <= 12 and 1 <= int(short.group("d")) <= calendar.monthrange(default_year, int(short.group("m")))[1]:
+        stripped = (question[:short.start()] + question[short.end():]).replace("  ", " ").strip()
+        return stripped, f"{default_year}-{int(short.group('m')):02d}-{int(short.group('d')):02d}"
     match = next((m for m in _DATE_PHRASE.finditer(question) if m.group("prep") or m.group("year")), None)
     if match is None:
         season = _SEASON_PHRASE.search(question)
