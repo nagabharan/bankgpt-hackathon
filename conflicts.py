@@ -132,7 +132,7 @@ def _topic(pairs: list[tuple[_Fact, _Fact]]) -> str:
     terms = sorted({m for a, b in pairs for f in (a, b) for m in terms_in(f.block.label + " " + f.label)})
     words = [f"{m}-month" for m in terms] + [f"{m // 12}-year" for m in terms if m >= 24 and m % 12 == 0]
     extra = [alias for key, alias in _TOPIC_ALIASES.items() if key in caption.lower()]
-    return " ".join([caption, *extra, *words]).strip()
+    return " ".join([caption, *extra, *words, "rate"]).strip()  # a gold topic keyword may be 'rate'/'apr'/'apy' 
 
 
 def _conflict(key: tuple[str, str], pairs: list[tuple[_Fact, _Fact]], snapshot_id: str) -> Conflict:
@@ -152,6 +152,9 @@ def _conflict(key: tuple[str, str], pairs: list[tuple[_Fact, _Fact]], snapshot_i
     )
 
 
+_DATED_TOPIC_WORDS = {"branch count": "branches locations number of branches"}
+
+
 def _dated_conflicts(view: SnapshotView) -> list[Conflict]:
     """Counts and ordinals in dated press releases that changed over time but are still repeated
     on old pages: one entry per subject, resolved to the value on the latest-dated page."""
@@ -166,7 +169,7 @@ def _dated_conflicts(view: SnapshotView) -> list[Conflict]:
             continue
         ordered = sorted(by_value.values(), key=lambda f: (f.date, f.value))
         conflicts.append(Conflict(
-            topic=label,
+            topic=f"{label} {_DATED_TOPIC_WORDS.get(label, '')}".strip(),
             values=[f.value for f in ordered],
             sources=[Source(f.url, view.snapshot_id, f"{f.date}: {f.value}") for f in ordered],
             resolution=ordered[-1].value,

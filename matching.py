@@ -115,7 +115,7 @@ def wants_list(text: str, query: list[str]) -> bool:
 
 
 def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: bool, rows_only: bool,
-                intent: str) -> list[tuple[float, int]]:
+                intent: str, question: str) -> list[tuple[float, int]]:
     """(score, doc_id) for the searched blocks that answer the question, best first."""
     wants_link = bool(LINK_WORDS.intersection(query))
     skipped = info.consumed.union(VALUE_SHAPES, SUPERLATIVES, LINK_WORDS, LIST_WORDS)
@@ -129,21 +129,22 @@ def _qualifying(index: Index, info: QuestionInfo, query: list[str], several: boo
             continue
         if not (block.links if wants_link else has_asked_value(query, block)):
             continue
-        scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0), doc_id))
+        scored.append((score * factor * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
+                       * affirmative_factor(question, block), doc_id))
     scored.sort(key=lambda pair: (-pair[0], pair[1]))  # ties keep index order: deterministic
     return scored
 
 
 def _score_candidates(index: Index, info: QuestionInfo, query: list[str], several: bool,
-                      intent: str) -> list[tuple[float, int]]:
+                      intent: str, question: str) -> list[tuple[float, int]]:
     """A question about a rate, fee or price is answered by a table row when one qualifies;
     otherwise (or for hours, policies) by any block, which may state the rate in prose."""
     if not MONEY_WORDS.intersection(query):
-        return _drop_superseded(index, _qualifying(index, info, query, several, False, intent))
-    rows = _qualifying(index, info, query, several, True, intent)
+        return _drop_superseded(index, _qualifying(index, info, query, several, False, intent, question))
+    rows = _qualifying(index, info, query, several, True, intent, question)
     if rows:
         return _drop_superseded(index, rows)
-    prose = _qualifying(index, info, query, several, False, intent)  # a rate stated in a sentence
+    prose = _qualifying(index, info, query, several, False, intent, question)  # a rate stated in a sentence
     return [(s, d) for s, d in prose if not any(part in index.blocks[d].url for part in ARTICLE_PATHS)]
 
 
@@ -162,7 +163,7 @@ def _drop_superseded(index: Index, scored: list[tuple[float, int]]) -> list[tupl
 
 
 EVIDENCE_CANDIDATES = 1000
-EVIDENCE_POOL = 10  # passing candidates compared when picking the best
+EVIDENCE_POOL = 40  # passing candidates compared when picking the best
 
 
 def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str], intent: str) -> list[Block]:
@@ -175,7 +176,8 @@ def _by_evidence(index: Index, kind: Kind, info: QuestionInfo, query: list[str],
         if (kind.shows(block.text) and info.fit(block) and coverage(index, required, block) >= kind.min_coverage
                 and has_anchor(index, required, block)
                 and not (kind.skip_articles and any(part in block.url for part in ARTICLE_PATHS))):
-            found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0), block))
+            found.append((score * segment_factor(intent, block.url) * index.page_prior.get(block.url, 1.0)
+                          * coverage(index, required, block), block))  # the fuller topic match wins
             if len(found) == EVIDENCE_POOL:
                 break
     if not found:
@@ -200,7 +202,7 @@ def select_blocks(index: Index, question: str) -> list[Block]:
         if found:
             return found
     several = wants_list(text, query)
-    scored = _score_candidates(index, parse_question(text), query, several, intent)
+    scored = _score_candidates(index, parse_question(text), query, several, intent, question)
     if not scored:
         return []
     top = scored[0][0]
@@ -219,6 +221,16 @@ def select_blocks(index: Index, question: str) -> list[Block]:
     kept = group[:MAX_LIST_BLOCKS if several else MAX_BLOCKS]  # the highest scored...
     unique = list(dict.fromkeys(blocks[d] for d in sorted(kept)))  # ...shown in page order
     return list({block.text: block for block in unique}.values())  # identical rows on two pages count once
+
+
+_YES_NO_QUESTION = re.compile(r"^\s*(?:can|could|do|does|is|are|will)\s+(?:i|you|we|dupaco|my|your)\b", re.I)
+_AFFIRMATIVE = re.compile(r"\b(?:yes|definitely|absolutely|you can|we offer|you may|available)\b", re.I)
+AFFIRMATIVE_FACTOR = 1.3
+
+
+def affirmative_factor(question: str, block: Block) -> float:
+    """A yes/no question is best answered by a block that says yes (or 'you can ...')."""
+    return AFFIRMATIVE_FACTOR if _YES_NO_QUESTION.search(question) and _AFFIRMATIVE.search(block.text) else 1.0
 
 
 ACTION_WORDS = frozenset({"join", "apply", "open", "enroll", "register", "signup"})

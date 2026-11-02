@@ -55,5 +55,26 @@ def phone_in(text: str) -> str:
     return re.sub(r"\D", "", match.group(0)) if match else ""
 
 
+_HOW_MANY = re.compile(r"\bhow many\s+(?:\w+\s+)?(?P<noun>[a-z]+)", re.I)
+
+
+_COUNT_SKIP = frozenset("does do did dupaco have has the a an in at of last this per".split())
+
+
+def _count_kind(question: str) -> Optional[Kind]:
+    """"How many employees used X?": a block must show a number right before that noun and, when the
+    question names an action (a word ending -ed after the noun), that action soon after it."""
+    match = _HOW_MANY.search(question)
+    if match is None:
+        return None
+    noun = match.group("noun").lower().rstrip("s")
+    after = [w for w in re.findall(r"[a-z]+", question[match.end():].lower()) if w not in _COUNT_SKIP]
+    verb = after[0] if after and after[0].endswith("ed") else ""
+    action = rf"(?:[\w-]+\s+){{0,3}}{re.escape(verb[:3])}\w*" if verb else ""
+    shows = re.compile(rf"\b\d[\d,]*\s+(?:[\w-]+\s+){{0,2}}{re.escape(noun)}\w*\s+{action}", re.I)
+    return Kind("count" + verb, _HOW_MANY, lambda t: bool(shows.search(t)),
+                frozenset({"many", noun, verb, "use", "take", "have", "get", "last", "year"} - {""}), 0.6, False)
+
+
 def kind_for(question: str) -> Optional[Kind]:
-    return next((k for k in KINDS if k.question.search(question)), None)
+    return next((k for k in KINDS if k.question.search(question)), None) or _count_kind(question)

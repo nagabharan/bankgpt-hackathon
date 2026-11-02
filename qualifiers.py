@@ -59,6 +59,7 @@ def year_spans_in(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+_MONTH_NAME = re.compile(r"\b(January|February|March|April|June|July|August|September|October|November|December)\b", re.I)
 _MONEY_AMOUNT = re.compile(r"\$(\d+(?:\.\d+)?)")
 # Amount tiers: "$10000 - $24999.99", "$25000+", "$300000 or less".
 _AMOUNT_BAND = re.compile(r"\$(\d+(?:\.\d+)?)\s*-\s*\$(\d+(?:\.\d+)?)|\$(\d+(?:\.\d+)?)\s*(\+|or less)")
@@ -120,6 +121,7 @@ def parse_question(text: str) -> QuestionInfo:
     spans = {m.group(0) for m in YEAR_SPAN.finditer(text)}
     years = tuple(sorted({int(y) for y in _YEAR.findall(text) if not any(y in s for s in spans)}))
     consumed.update(str(y) for y in years)
+    consumed.update(m.lower() for m in _MONTH_NAME.findall(text))  # a month is a date qualifier, not a topic word
     raw_amounts = _MONEY_AMOUNT.findall(text)
     consumed.update(raw_amounts)
     amounts = tuple(float(a) for a in raw_amounts)
